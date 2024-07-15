@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -266,6 +266,170 @@ fz_htdoc_open_document_with_stream_and_dir(fz_context *ctx, fz_stream *stm, fz_a
 
 /* Generic HTML document handler */
 
+static int isws(int c)
+{
+	return c == 32 || c == 9 || c == 10 || c == 13 || c == 12;
+}
+
+int htdoc_recognize_html_content(fz_context *ctx, const fz_document_handler *handler, fz_stream *stream, fz_archive *dir)
+{
+	uint8_t buffer[4096];
+	size_t i, n, m;
+	enum {
+		state_top,
+		state_open,
+		state_pling,
+		state_maybe_doctype,
+		state_maybe_doctype_ws,
+		state_maybe_comment,
+		state_maybe_html,
+		state_comment
+	};
+	int state = state_top;
+	int type = 0;
+
+	if (stream == NULL)
+		return 0;
+
+	/* Simple state machine. Search for "<!doctype html" or "<html" in the first
+	 * 4K of the file, allowing for comments and whitespace and case insensitivity. */
+
+	n = fz_read(ctx, stream, buffer, sizeof(buffer));
+	fz_seek(ctx, stream, 0, SEEK_SET);
+	if (n == 0)
+		return 0;
+
+	i = 0;
+	if (n >= 3 && buffer[0] == 0xEF && buffer[1] == 0xBB && buffer[2] == 0xBF)
+	{
+		/* UTF-8 encoded BOM. Just skip it. */
+		i = 3;
+	}
+	else if (n >= 2 && buffer[0] == 0xFE && buffer[1] == 0xFF)
+	{
+		/* UTF-16, big endian. */
+		type = 1;
+		i = 2;
+		n &= ~1;
+	}
+	else if (n >= 2 && buffer[0] == 0xFF && buffer[1] == 0xFE)
+	{
+		/* UTF-16, little endian. */
+		i = 2;
+		type = 2;
+		n &= ~1;
+	}
+
+	while (i < n)
+	{
+		int c;
+
+		switch (type)
+		{
+		case 0: /* UTF-8 */
+			c = buffer[i++];
+			break;
+		case 1: /* UTF-16 - big endian */
+			c = buffer[i++] << 8;
+			c |= buffer[i++];
+			break;
+		case 2: /* UTF-16 - little endian */
+			c = buffer[i++];
+			c |= buffer[i++] << 8;
+			break;
+		}
+
+		switch (state)
+		{
+		case state_top:
+			if (isws(c))
+				continue; /* whitespace */
+			if (c == '<')
+				state = state_open;
+			else
+				return 0; /* Non whitespace found at the top level prior to a known tag. Fail. */
+			break;
+		case state_open:
+			if (isws(c))
+				continue; /* whitespace */
+			if (c == '!')
+				state = state_pling;
+			else if (c == 'h' || c == 'H')
+				state = state_maybe_html;
+			else
+				return 0; /* Not an acceptable opening tag. */
+			m = 0;
+			break;
+		case state_pling:
+			if (isws(c))
+				continue; /* whitespace */
+			else if (c == '-')
+				state = state_maybe_comment;
+			else if (c == 'd' || c == 'D')
+				state = state_maybe_doctype;
+			else
+				return 0; /* Not an acceptable opening tag. */
+			break;
+		case state_maybe_comment:
+			if (c == '-')
+				state = state_comment;
+			else
+				return 0; /* Not an acceptable opening tag. */
+			break;
+		case state_comment:
+			if (c == '-')
+			{
+				m++;
+			}
+			else if (c == '>' && m >= 2)
+			{
+				state = state_top;
+			}
+			else
+				m = 0;
+			break;
+		case state_maybe_doctype:
+			if (c == "octype"[m] || c == "OCTYPE"[m])
+			{
+				m++;
+				if (m == 6)
+				{
+					state = state_maybe_doctype_ws;
+					m = 0;
+				}
+			}
+			else
+				return 0; /* Not an acceptable opening tag. */
+			break;
+		case state_maybe_doctype_ws:
+			if (isws(c))
+				m++;
+			else if (m > 0 && (c == 'h' || c == 'H'))
+			{
+				state = state_maybe_html;
+				m = 0;
+			}
+			else
+				return 0; /* Not an acceptable opening tag. */
+			break;
+		case state_maybe_html:
+			if (c == "tml"[m] || c == "TML"[m])
+			{
+				m++;
+				if (m == 3)
+					/* Only return a score of 50, so that other, more
+					 * specific recognisers have scope to override this. */
+					return 50;
+			}
+			else
+				return 0; /* Not an acceptable opening tag. */
+			break;
+		}
+	}
+
+	return 0;
+}
+
 static const fz_htdoc_format_t fz_htdoc_html5 =
 {
 	"HTML5",
@@ -274,7 +438,7 @@ static const fz_htdoc_format_t fz_htdoc_html5 =
 };
 
 static fz_document *
-htdoc_open_document(fz_context *ctx, fz_stream *file, fz_stream *accel, fz_archive *dir)
+htdoc_open_document(fz_context *ctx, const fz_document_handler *handler, fz_stream *file, fz_stream *accel, fz_archive *dir)
 {
 	return fz_htdoc_open_document_with_stream_and_dir(ctx, file, dir, &fz_htdoc_html5);
 }
@@ -298,6 +462,8 @@ fz_document_handler html_document_handler =
 	htdoc_open_document,
 	htdoc_extensions,
 	htdoc_mimetypes,
+	htdoc_recognize_html_content,
+	1
 };
 
 /* XHTML document handler */
@@ -310,7 +476,7 @@ static const fz_htdoc_format_t fz_htdoc_xhtml =
 };
 
 static fz_document *
-xhtdoc_open_document(fz_context *ctx, fz_stream *file, fz_stream *accel, fz_archive *dir)
+xhtdoc_open_document(fz_context *ctx, const fz_document_handler *handler, fz_stream *file, fz_stream *accel, fz_archive *dir)
 {
 	return fz_htdoc_open_document_with_stream_and_dir(ctx, file, dir, &fz_htdoc_xhtml);
 }
@@ -332,7 +498,9 @@ fz_document_handler xhtml_document_handler =
 	NULL,
 	xhtdoc_open_document,
 	xhtdoc_extensions,
-	xhtdoc_mimetypes
+	xhtdoc_mimetypes,
+	NULL,
+	1
 };
 
 /* FB2 document handler */
@@ -345,7 +513,7 @@ static const fz_htdoc_format_t fz_htdoc_fb2 =
 };
 
 static fz_document *
-fb2doc_open_document(fz_context *ctx, fz_stream *file, fz_stream *accel, fz_archive *dir)
+fb2doc_open_document(fz_context *ctx, const fz_document_handler *handler, fz_stream *file, fz_stream *accel, fz_archive *dir)
 {
 	return fz_htdoc_open_document_with_stream_and_dir(ctx, file, dir, &fz_htdoc_fb2);
 }
@@ -387,26 +555,28 @@ mobi_open_document_with_buffer(fz_context *ctx, fz_buffer *mobi)
 {
 	fz_archive *dir = NULL;
 	fz_buffer *html;
+	fz_document *doc;
 	fz_var(dir);
 	fz_try(ctx)
 	{
 		dir = fz_extract_html_from_mobi(ctx, mobi);
 		html = fz_read_archive_entry(ctx, dir, "index.html");
+		doc = fz_htdoc_open_document_with_buffer(ctx, dir, html, &fz_htdoc_mobi);
 	}
 	fz_always(ctx)
 	{
 		fz_drop_buffer(ctx, mobi);
+		fz_drop_archive(ctx, dir);
 	}
 	fz_catch(ctx)
 	{
-		fz_drop_archive(ctx, dir);
 		fz_rethrow(ctx);
 	}
-	return fz_htdoc_open_document_with_buffer(ctx, dir, html, &fz_htdoc_mobi);
+	return doc;
 }
 
 static fz_document *
-mobi_open_document(fz_context *ctx, fz_stream *file, fz_stream *accel, fz_archive *dir)
+mobi_open_document(fz_context *ctx, const fz_document_handler *handler, fz_stream *file, fz_stream *accel, fz_archive *dir)
 {
 	return mobi_open_document_with_buffer(ctx, fz_read_all(ctx, file, 0));
 }

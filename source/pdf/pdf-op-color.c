@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -389,7 +389,7 @@ rewrite_cs(fz_context *ctx, pdf_color_processor *p, pdf_obj *cs_obj, int n, floa
 		/* Has it been rewritten to be a pattern? */
 		type = pdf_dict_get_int(ctx, cs_obj, PDF_NAME(PatternType));
 		if (type < 1 || type > 2)
-			fz_throw(ctx, FZ_ERROR_GENERIC, "Bad PatternType");
+			fz_throw(ctx, FZ_ERROR_FORMAT, "Bad PatternType");
 
 		/* Make a new entry (or find an existing one), and send that. */
 		make_resource_instance(ctx, p, PDF_NAME(Pattern), "Pa", new_name, sizeof(new_name), cs_obj);
@@ -413,7 +413,7 @@ rewrite_cs(fz_context *ctx, pdf_color_processor *p, pdf_obj *cs_obj, int n, floa
 			break;
 		}
 
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Illegal rewritten colorspace");
+		fz_throw(ctx, FZ_ERROR_FORMAT, "Illegal rewritten colorspace");
 	}
 	fz_always(ctx)
 	{
@@ -1708,6 +1708,14 @@ pdf_color_pop_resources(fz_context *ctx, pdf_processor *proc)
 	return pdf_processor_pop_resources(ctx, p->chain);
 }
 
+static void
+pdf_reset_color_processor(fz_context *ctx, pdf_processor *proc)
+{
+	pdf_color_processor *p = (pdf_color_processor*)proc;
+
+	pdf_reset_processor(ctx, p->chain);
+}
+
 pdf_processor *
 pdf_new_color_filter(
 	fz_context *ctx,
@@ -1723,6 +1731,7 @@ pdf_new_color_filter(
 
 	proc->super.close_processor = pdf_close_color_processor;
 	proc->super.drop_processor = pdf_drop_color_processor;
+	proc->super.reset_processor = pdf_reset_color_processor;
 
 	proc->super.push_resources = pdf_color_push_resources;
 	proc->super.pop_resources = pdf_color_pop_resources;
@@ -1858,6 +1867,8 @@ pdf_new_color_filter(
 	proc->chain = chain;
 	proc->global_options = global_options;
 	proc->options = options;
+
+	proc->super.requirements = PDF_PROCESSOR_REQUIRES_DECODED_IMAGES | proc->chain->requirements;
 
 	return (pdf_processor*)proc;
 }

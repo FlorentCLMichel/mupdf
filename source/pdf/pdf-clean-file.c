@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -201,7 +201,7 @@ static int strip_outlines(fz_context *ctx, pdf_document *doc, pdf_obj *outlines,
 	pdf_obj *first;
 	pdf_obj *last;
 
-	if (outlines == NULL)
+	if (!pdf_is_dict(ctx, outlines))
 		return 0;
 
 	first = pdf_dict_get(ctx, outlines, PDF_NAME(First));
@@ -227,7 +227,7 @@ static int strip_outlines(fz_context *ctx, pdf_document *doc, pdf_obj *outlines,
 	return nc;
 }
 
-static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int count, int *new_page_list)
+static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int count, const int *new_page_list)
 {
 	pdf_obj *oldroot, *pages, *kids, *olddests;
 	pdf_obj *root = NULL;
@@ -414,7 +414,7 @@ static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int coun
 	}
 }
 
-void pdf_rearrange_pages(fz_context *ctx, pdf_document *doc, int count, int *new_page_list)
+void pdf_rearrange_pages(fz_context *ctx, pdf_document *doc, int count, const int *new_page_list)
 {
 	pdf_begin_operation(ctx, doc, "Rearrange pages");
 	fz_try(ctx)
@@ -445,13 +445,13 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 			if (!pdf_authenticate_password(ctx, pdf, password))
 				fz_throw(ctx, FZ_ERROR_ARGUMENT, "cannot authenticate password: %s", infile);
 
+		len = cap = 0;
+
 		/* Only retain the specified subset of the pages */
 		if (argc)
 		{
 			int pagecount = pdf_count_pages(ctx, pdf);
 			int argidx = 0;
-
-			len = cap = 0;
 
 			while (argc - argidx)
 			{
@@ -484,6 +484,9 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 		}
 
 		pdf_rewrite_images(ctx, pdf, &opts->image);
+
+		if (opts->subset_fonts)
+			pdf_subset_fonts(ctx, pdf, len, pages);
 
 		pdf_save_document(ctx, pdf, outfile, &opts->write);
 	}

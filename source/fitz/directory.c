@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -28,6 +28,7 @@
 
 #ifdef _MSC_VER
 #include <windows.h>
+#include <errno.h>
 #define stat _stat
 #else
 #include <dirent.h>
@@ -55,45 +56,64 @@ static void drop_directory(fz_context *ctx, fz_archive *arch)
 	fz_free(ctx, dir->entries);
 }
 
+static void make_dir_path(char *output, fz_archive *arch, const char *tail, size_t size)
+{
+	/* Skip any leading ../ path segments, so we don't look outside the
+	 * directory itself. The paths coming here have already been
+	 * canonicalized with fz_cleanname so any remaining ".." parts are
+	 * guaranteed to be at the start of the path.
+	 */
+	fz_directory *dir = (fz_directory *) arch;
+	while (tail[0] == '.' && tail[1] == '.' && tail[2] == '/')
+		tail += 3;
+	fz_strlcpy(output, dir->path, size);
+	fz_strlcat(output, "/", size);
+	fz_strlcat(output, tail, size);
+}
+
 static fz_stream *open_dir_entry(fz_context *ctx, fz_archive *arch, const char *name)
 {
-	fz_directory *dir = (fz_directory *) arch;
-	char path[2048];
-	fz_strlcpy(path, dir->path, sizeof path);
-	fz_strlcat(path, "/", sizeof path);
-	fz_strlcat(path, name, sizeof path);
+	char path[PATH_MAX];
+	make_dir_path(path, arch, name, sizeof path);
 	return fz_try_open_file(ctx, path);
 }
 
 static fz_buffer *read_dir_entry(fz_context *ctx, fz_archive *arch, const char *name)
 {
-	fz_directory *dir = (fz_directory *) arch;
-	char path[2048];
-	fz_strlcpy(path, dir->path, sizeof path);
-	fz_strlcat(path, "/", sizeof path);
-	fz_strlcat(path, name, sizeof path);
+	char path[PATH_MAX];
+	make_dir_path(path, arch, name, sizeof path);
 	return fz_try_read_file(ctx, path);
 }
 
 static int has_dir_entry(fz_context *ctx, fz_archive *arch, const char *name)
 {
-	fz_directory *dir = (fz_directory *) arch;
-	char path[2048];
-	fz_strlcpy(path, dir->path, sizeof path);
-	fz_strlcat(path, "/", sizeof path);
-	fz_strlcat(path, name, sizeof path);
+	char path[PATH_MAX];
+	make_dir_path(path, arch, name, sizeof path);
 	return fz_file_exists(ctx, path);
 }
 
 int
 fz_is_directory(fz_context *ctx, const char *path)
 {
+#ifdef _WIN32
+	wchar_t *wpath = fz_wchar_from_utf8(ctx, path);
+	struct stat info;
+	int ret;
+
+	ret = _wstat(wpath, &info);
+	fz_free(ctx, wpath);
+	if (ret < 0)
+		return 0;
+
+	return S_ISDIR(info.st_mode);
+#else
 	struct stat info;
 
 	if (stat(path, &info) < 0)
 		return 0;
 
 	return S_ISDIR(info.st_mode);
+#endif
 }
 
 static int
@@ -156,7 +176,10 @@ fz_open_directory(fz_context *ctx, const char *path)
 			int rune;
 			p += fz_chartorune(&rune, p);
 			if (rune >= 0x10000 || rune < 0)
-				fz_throw(ctx, FZ_ERROR_GENERIC, "Unrepresentable UTF-8 char in directory name");
+			{
+				errno = EINVAL;
+				fz_throw(ctx, FZ_ERROR_SYSTEM, "Unrepresentable UTF-8 char in directory name");
+			}
 			z++;
 		}
 		w = wpath = fz_malloc(ctx, z * sizeof(WCHAR));

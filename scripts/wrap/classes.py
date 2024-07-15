@@ -153,7 +153,10 @@ class ClassExtra:
 
             Otherwise if true, generated wrapper class must be copyable. If
             pod is false, we generate a copy constructor by looking for a
-            fz_keep_*() function; it's an error if we can't find this function.
+            fz_keep_*() function; it's an error if we can't find this function
+            [2024-01-24 fixme: actually we don't apear to raise an
+            error in this case, instead we make class non-copyable.
+            e.g. FzCompressedBuffer.].
 
             Otherwise if false we create a private copy constructor.
 
@@ -1771,6 +1774,7 @@ classextras = ClassExtras(
                             this->filters = nullptr;
                             pdf_filter_factory eof = {{ nullptr, nullptr}};
                             m_filters.push_back( eof);
+                            this->newlines = 0;
                         }}
                         ''',
                         comment = '/* Default constructor initialises all fields to null/zero. */',
@@ -1908,7 +1912,6 @@ classextras = ClassExtras(
                         f'/* Returns wrapper for .obj member. */',
                         ),
                     ],
-                copyable = 'default',
                 ),
 
         pdf_image_rewriter_options = ClassExtra(

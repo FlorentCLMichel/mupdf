@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -248,6 +248,17 @@ const char *fz_runeptr(const char *str, int idx);
 	Returns the number of runes in the string.
 */
 int fz_utflen(const char *s);
+
+/*
+	Convert a wchar string into a new heap allocated utf8 one.
+*/
+char *fz_utf8_from_wchar(fz_context *ctx, const wchar_t *s);
+
+/*
+	Convert a utf8 string into a new heap allocated wchar one.
+*/
+wchar_t *fz_wchar_from_utf8(fz_context *ctx, const char *path);
+
 
 /**
 	Locale-independent decimal to binary conversion. On overflow

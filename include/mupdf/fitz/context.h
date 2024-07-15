@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -137,6 +137,14 @@ const char *fz_caught_message(fz_context *ctx);
 	This assumes no intervening use of fz_try/fz_catch.
 */
 int fz_caught(fz_context *ctx);
+
+/*
+	Within an fz_catch() block, retrieve the errno code for
+	the current SYSTEM exception.
+
+	Is undefined for non-SYSTEM errors.
+*/
+int fz_caught_errno(fz_context *ctx);
 
 /**
 	Within an fz_catch() block, rethrow the current exception
@@ -707,6 +715,17 @@ void *fz_calloc_no_throw(fz_context *ctx, size_t count, size_t size);
 void *fz_realloc_no_throw(fz_context *ctx, void *p, size_t size);
 
 /**
+	fz_malloc equivalent, except that the block is guaranteed aligned.
+	Block must be freed later using fz_free_aligned.
+*/
+void *fz_malloc_aligned(fz_context *ctx, size_t size, int align);
+
+/**
+	fz_free equivalent, for blocks allocated via fz_malloc_aligned.
+*/
+void fz_free_aligned(fz_context *ctx, void *p);
+
+/**
 	Portable strdup implementation, using fz allocators.
 */
 char *fz_strdup(fz_context *ctx, const char *s);
@@ -716,6 +735,34 @@ char *fz_strdup(fz_context *ctx, const char *s);
 */
 void fz_memrnd(fz_context *ctx, uint8_t *block, int len);
 
+/*
+	Reference counted malloced C strings.
+*/
+typedef struct
+{
+	int refs;
+	char str[1];
+} fz_string;
+
+/*
+	Allocate a new string to hold a copy of str.
+
+	Returns with a refcount of 1.
+*/
+fz_string *fz_new_string(fz_context *ctx, const char *str);
+
+/*
+	Take another reference to a string.
+*/
+fz_string *fz_keep_string(fz_context *ctx, fz_string *str);
+
+/*
+	Drop a reference to a string, freeing if the refcount
+	reaches 0.
+*/
+void fz_drop_string(fz_context *ctx, fz_string *str);
+
+#define fz_cstring_from_string(A) ((A) == NULL ? NULL : (A)->str)
 
 /* Implementation details: subject to change. */
 
@@ -745,6 +792,7 @@ typedef struct
 	fz_error_stack_slot padding;
 	fz_error_stack_slot *stack_base;
 	int errcode;
+	int errnum; /* errno for SYSTEM class errors */
 	void *print_user;
 	void (*print)(void *user, const char *message);
 	char message[256];

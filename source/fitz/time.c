@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <time.h>
 #include <windows.h>
+#include <direct.h> /* for mkdir */
 
 #ifdef _MSC_VER
 #ifndef _WINRT
@@ -62,8 +63,8 @@ int gettimeofday(struct timeval *tv, struct timezone *tz)
 #endif /* !_WINRT */
 #endif /* _MSC_VER */
 
-char *
-fz_utf8_from_wchar(const wchar_t *s)
+static char *
+utf8_from_wchar(const wchar_t *s)
 {
 	const wchar_t *src = s;
 	char *d;
@@ -89,11 +90,13 @@ fz_utf8_from_wchar(const wchar_t *s)
 	return d;
 }
 
-wchar_t *
-fz_wchar_from_utf8(const char *s)
+static wchar_t *
+wchar_from_utf8(const char *s)
 {
 	wchar_t *d, *r;
 	int c;
+	/* This allocation is larger than we need, but it's guaranteed
+	 * to be safe. */
 	r = d = malloc((strlen(s) + 1) * sizeof(wchar_t));
 	if (!r)
 		return NULL;
@@ -102,7 +105,11 @@ fz_wchar_from_utf8(const char *s)
 		/* Truncating c to a wchar_t can be problematic if c
 		 * is 0x10000. */
 		if (c >= 0x10000)
-			c = FZ_REPLACEMENT_CHARACTER;
+		{
+			c -= 0x10000;
+			*d++ = 0xd800 + (c>>10);
+			c = 0xdc00 + (c&1023);
+		}
 		*d++ = c;
 	}
 	*d = 0;
@@ -115,13 +122,13 @@ fz_fopen_utf8(const char *name, const char *mode)
 	wchar_t *wname, *wmode;
 	FILE *file;
 
-	wname = fz_wchar_from_utf8(name);
+	wname = wchar_from_utf8(name);
 	if (wname == NULL)
 	{
 		return NULL;
 	}
 
-	wmode = fz_wchar_from_utf8(mode);
+	wmode = wchar_from_utf8(mode);
 	if (wmode == NULL)
 	{
 		free(wname);
@@ -141,7 +148,7 @@ fz_remove_utf8(const char *name)
 	wchar_t *wname;
 	int n;
 
-	wname = fz_wchar_from_utf8(name);
+	wname = wchar_from_utf8(name);
 	if (wname == NULL)
 	{
 		errno = ENOMEM;
@@ -169,7 +176,7 @@ fz_argv_from_wargv(int argc, wchar_t **wargv)
 
 	for (i = 0; i < argc; i++)
 	{
-		argv[i] = Memento_label(fz_utf8_from_wchar(wargv[i]), "fz_arg");
+		argv[i] = Memento_label(utf8_from_wchar(wargv[i]), "fz_arg");
 		if (argv[i] == NULL)
 		{
 			fprintf(stderr, "Out of memory while processing command line args!\n");
@@ -195,7 +202,7 @@ fz_stat_ctime(const char *path)
 	struct _stat info;
 	wchar_t *wpath;
 
-	wpath = fz_wchar_from_utf8(path);
+	wpath = wchar_from_utf8(path);
 	if (wpath == NULL)
 		return 0;
 
@@ -214,7 +221,7 @@ fz_stat_mtime(const char *path)
 	struct _stat info;
 	wchar_t *wpath;
 
-	wpath = fz_wchar_from_utf8(path);
+	wpath = wchar_from_utf8(path);
 	if (wpath == NULL)
 		return 0;
 
@@ -225,6 +232,22 @@ fz_stat_mtime(const char *path)
 
 	free(wpath);
 	return info.st_mtime;
+}
+
+int
+fz_mkdir(char *path)
+{
+	int ret;
+	wchar_t *wpath = wchar_from_utf8(path);
+
+	if (wpath == NULL)
+		return -1;
+
+	ret = _wmkdir(wpath);
+
+	free(wpath);
+
+	return ret;
 }
 
 #else
@@ -245,6 +268,12 @@ fz_stat_mtime(const char *path)
 	if (stat(path, &info) < 0)
 		return 0;
 	return info.st_mtime;
+}
+
+int
+fz_mkdir(char *path)
+{
+	return mkdir(path, S_IRWXU | S_IRWXG | S_IRWXO);
 }
 
 #endif /* _WIN32 */

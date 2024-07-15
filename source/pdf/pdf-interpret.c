@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -48,14 +48,14 @@ pdf_close_processor(fz_context *ctx, pdf_processor *proc)
 {
 	void (*close_processor)(fz_context *ctx, pdf_processor *proc);
 
-	if (!proc)
+	if (!proc || proc->closed)
 		return;
 
+	proc->closed = 1;
 	close_processor = proc->close_processor;
 	if (!close_processor)
 		return;
 
-	proc->close_processor = NULL;
 	close_processor(ctx, proc); /* Tail recursion */
 }
 
@@ -64,12 +64,25 @@ pdf_drop_processor(fz_context *ctx, pdf_processor *proc)
 {
 	if (fz_drop_imp(ctx, proc, &proc->refs))
 	{
-		if (proc->close_processor)
+		if (!proc->closed)
 			fz_warn(ctx, "dropping unclosed PDF processor");
 		if (proc->drop_processor)
 			proc->drop_processor(ctx, proc);
 		fz_free(ctx, proc);
 	}
+}
+
+void pdf_reset_processor(fz_context *ctx, pdf_processor *proc)
+{
+	if (proc == NULL)
+		return;
+
+	proc->closed = 0;
+
+	if (proc->reset_processor == NULL)
+		fz_throw(ctx, FZ_ERROR_GENERIC, "Cannot reset PDF processor");
+
+	proc->reset_processor(ctx, proc);
 }
 
 static void
@@ -382,7 +395,10 @@ pdf_process_Do(fz_context *ctx, pdf_processor *proc, pdf_csi *csi)
 	{
 		if (proc->op_Do_image)
 		{
-			fz_image *image = pdf_load_image(ctx, csi->doc, xobj);
+			fz_image *image = NULL;
+
+			if (proc->requirements && PDF_PROCESSOR_REQUIRES_DECODED_IMAGES)
+				image = pdf_load_image(ctx, csi->doc, xobj);
 			fz_try(ctx)
 				proc->op_Do_image(ctx, proc, csi->name, image);
 			fz_always(ctx)

@@ -1,4 +1,4 @@
-// Copyright (C) 2020-2023 Artifex Software, Inc.
+// Copyright (C) 2020-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -164,7 +164,7 @@ ocr_set_image(fz_context *ctx, tesseract::TessBaseAPI *api, fz_pixmap *pix)
 	Pix *image = pixCreateHeader(pix->w, pix->h, 8);
 
 	if (image == NULL)
-		fz_throw(ctx, FZ_ERROR_SYSTEM, "Tesseract image creation failed");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "Tesseract image creation failed");
 	pixSetData(image, (l_uint32 *)pix->samples);
 	pixSetPadBits(image, 1);
 	pixSetXRes(image, pix->xres);

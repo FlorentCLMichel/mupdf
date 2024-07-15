@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -192,7 +192,7 @@ void fz_new_icc_context(fz_context *ctx)
 {
 	cmsContext glo = cmsCreateContext(&fz_lcms_memhandler, ctx);
 	if (!glo)
-		fz_throw(ctx, FZ_ERROR_SYSTEM, "cmsCreateContext failed");
+		fz_throw(ctx, FZ_ERROR_LIBRARY, "cmsCreateContext failed");
 	ctx->colorspace->icc_instance = glo;
 	cmsSetLogErrorHandler(glo, fz_lcms_log_error);
 }

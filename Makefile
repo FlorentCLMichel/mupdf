@@ -18,11 +18,16 @@ include Makethird
 
 # --- Configuration ---
 
-# Do not specify CFLAGS or LIBS on the make invocation line - specify
-# XCFLAGS or XLIBS instead. Make ignores any lines in the makefile that
-# set a variable that was set on the command line.
+# Do not specify CFLAGS, LDFLAGS, LIB_LDFLAGS, EXE_LDFLAGS or LIBS on the make
+# invocation line - specify XCFLAGS, XLDFLAGS, XLIB_LDFLAGS, XEXE_LDFLAGS or
+# XLIBS instead. Make ignores any lines in the makefile that set a variable
+# that was set on the command line.
 CFLAGS += $(XCFLAGS) -Iinclude
 LIBS += $(XLIBS) -lm
+
+LDFLAGS += $(XLDFLAGS)
+LIB_LDFLAGS += $(XLIB_LDFLAGS)
+EXE_LDFLAGS += $(XEXE_LDFLAGS)
 
 ifneq ($(threading),no)
   ifeq ($(HAVE_PTHREAD),yes)
@@ -41,9 +46,11 @@ VERSION_MINOR = $(shell grep "define FZ_VERSION_MINOR" include/mupdf/fitz/versio
 VERSION_PATCH = $(shell grep "define FZ_VERSION_PATCH" include/mupdf/fitz/version.h | cut -d ' ' -f 3)
 
 ifeq ($(LINUX_OR_OPENBSD),yes)
-  SO_VERSION = .$(VERSION_MINOR).$(VERSION_PATCH)
-  ifeq ($(OS),Linux)
-    SO_VERSION_LINUX := yes
+  ifneq ($(USE_SONAME),no)
+    SO_VERSION = .$(VERSION_MINOR).$(VERSION_PATCH)
+    ifeq ($(OS),Linux)
+      SO_VERSION_LINUX := yes
+    endif
   endif
 endif
 
@@ -139,6 +146,9 @@ $(OUT)/source/fitz/memento.o : source/fitz/memento.c
 	$(CC_CMD) $(WARNING_CFLAGS) $(LIB_CFLAGS) $(THIRD_CFLAGS) -DMEMENTO_MUPDF_HACKS
 
 $(OUT)/source/%.o : source/%.c
+	$(CC_CMD) $(WARNING_CFLAGS) -Wdeclaration-after-statement $(LIB_CFLAGS) $(THIRD_CFLAGS)
+
+$(OUT)/thirdparty/so/source/%.o : thirdparty/so/source/%.c
 	$(CC_CMD) $(WARNING_CFLAGS) -Wdeclaration-after-statement $(LIB_CFLAGS) $(THIRD_CFLAGS)
 
 $(OUT)/source/%.o : source/%.cpp
@@ -454,10 +464,12 @@ incdir ?= $(prefix)/include
 mandir ?= $(prefix)/share/man
 docdir ?= $(prefix)/share/doc/mupdf
 pydir ?= $(shell python3 -c "import sysconfig; print(sysconfig.get_path('platlib'))")
+SO_INSTALL_MODE ?= 644
 
 third: $(THIRD_LIB)
 extra-libs: $(THIRD_GLUT_LIB)
-libs: $(LIBS_TO_INSTALL_IN_BIN) $(LIBS_TO_INSTALL_IN_LIB)
+libs: $(LIBS_TO_INSTALL_IN_BIN) $(LIBS_TO_INSTALL_IN_LIB) $(COMMERCIAL_LIBS)
+commercial-libs: $(COMMERCIAL_LIBS)
 tools: $(TOOL_APPS)
 apps: $(TOOL_APPS) $(VIEW_APPS)
 
@@ -485,7 +497,8 @@ install-docs:
 
 	install -d $(DESTDIR)$(docdir)
 	install -d $(DESTDIR)$(docdir)/examples
-	install -m 644 README COPYING CHANGES $(DESTDIR)$(docdir)
+	install -m 644 README CHANGES $(DESTDIR)$(docdir)
+	install -m 644 $(wildcard COPYING LICENSE) $(DESTDIR)$(docdir)
 	install -m 644 docs/examples/* $(DESTDIR)$(docdir)/examples
 
 install: install-libs install-apps install-docs
@@ -495,9 +508,6 @@ install-docs-html:
 	install -d $(DESTDIR)$(docdir)
 	install -d $(DESTDIR)$(docdir)/_images
 	install -d $(DESTDIR)$(docdir)/_static
-	install -d $(DESTDIR)$(docdir)/_static/js
-	install -d $(DESTDIR)$(docdir)/_static/css
-	install -d $(DESTDIR)$(docdir)/_static/css/fonts
 	install -m 644 build/docs/html/*.html $(DESTDIR)$(docdir)
 	install -m 644 build/docs/html/*.inv $(DESTDIR)$(docdir)
 	install -m 644 build/docs/html/*.js $(DESTDIR)$(docdir)
@@ -506,10 +516,6 @@ install-docs-html:
 	install -m 644 build/docs/html/_static/*.ico $(DESTDIR)$(docdir)/_static
 	install -m 644 build/docs/html/_static/*.js $(DESTDIR)$(docdir)/_static
 	install -m 644 build/docs/html/_static/*.png $(DESTDIR)$(docdir)/_static
-	install -m 644 build/docs/html/_static/*.svg $(DESTDIR)$(docdir)/_static
-	install -m 644 build/docs/html/_static/js/* $(DESTDIR)$(docdir)/_static/js
-	install -m 644 build/docs/html/_static/css/*.css $(DESTDIR)$(docdir)/_static/css
-	install -m 644 build/docs/html/_static/css/fonts/* $(DESTDIR)$(docdir)/_static/css/fonts
 
 tarball:
 	bash scripts/archive.sh
@@ -611,13 +617,17 @@ $(error OUT=$(OUT) does not contain shared)
 endif
 
 # C++, Python and C# shared libraries.
+#
+# To disable automatic use of a venv, use `make VENV_FLAG= ...` or `VENV_FLAG=
+# make ...`.
+#
+VENV_FLAG ?= --venv
 c++-%: shared-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b 01
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b 01
 python-%: c++-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b 23
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b 23
 csharp-%: c++-%
-	./scripts/mupdfwrap.py --venv -d $(OUT) -b --csharp 23
-
+	./scripts/mupdfwrap.py $(VENV_FLAG) -d $(OUT) -b --csharp 23
 
 # Installs of C, C++, Python and C# shared libraries
 #
@@ -631,21 +641,21 @@ endif
 
 install-shared-c: install-shared-check shared install-headers
 	install -d $(DESTDIR)$(libdir)
-	install -m 644 $(OUT)/libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
+	install -m $(SO_INSTALL_MODE) $(OUT)/libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
 ifneq ($(OS),OpenBSD)
 	ln -sf libmupdf.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdf.$(SO)
 endif
 
 install-shared-c++: install-shared-c c++
 	install -m 644 platform/c++/include/mupdf/*.h $(DESTDIR)$(incdir)/mupdf
-	install -m 644 $(OUT)/libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
+	install -m $(SO_INSTALL_MODE) $(OUT)/libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/
 ifneq ($(OS),OpenBSD)
 	ln -sf libmupdfcpp.$(SO)$(SO_VERSION) $(DESTDIR)$(libdir)/libmupdfcpp.$(SO)
 endif
 
 install-shared-python: install-shared-c++ python
 	install -d $(DESTDIR)$(pydir)/mupdf
-	install -m 644 $(OUT)/_mupdf.$(SO) $(DESTDIR)$(pydir)/mupdf
+	install -m $(SO_INSTALL_MODE) $(OUT)/_mupdf.$(SO) $(DESTDIR)$(pydir)/mupdf
 	install -m 644 $(OUT)/mupdf.py $(DESTDIR)$(pydir)/mupdf/__init__.py
 
 else

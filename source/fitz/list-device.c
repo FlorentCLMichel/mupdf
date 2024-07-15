@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -1344,6 +1344,8 @@ fz_list_set_default_colorspaces(fz_context *ctx, fz_device *dev, fz_default_colo
 static void
 fz_list_begin_layer(fz_context *ctx, fz_device *dev, const char *layer_name)
 {
+	size_t len = layer_name ? strlen(layer_name) : 0;
+
 	fz_append_display_node(
 		ctx,
 		dev,
@@ -1356,8 +1358,8 @@ fz_list_begin_layer(fz_context *ctx, fz_device *dev, const char *layer_name)
 		NULL, /* alpha */
 		NULL,
 		NULL, /* stroke */
-		layer_name, /* private_data */
-		1+strlen(layer_name)); /* private_data_len */
+		len ? layer_name : "", /* private_data */
+		len + 1); /* private_data_len */
 }
 
 static void
@@ -1380,7 +1382,7 @@ fz_list_end_layer(fz_context *ctx, fz_device *dev)
 }
 
 static void
-fz_list_begin_structure(fz_context *ctx, fz_device *dev, fz_structure standard, const char *raw, int uid)
+fz_list_begin_structure(fz_context *ctx, fz_device *dev, fz_structure standard, const char *raw, int idx)
 {
 	unsigned char *data;
 	size_t len = (raw ? strlen(raw) : 0);
@@ -1398,13 +1400,13 @@ fz_list_begin_structure(fz_context *ctx, fz_device *dev, fz_structure standard, 
 		NULL,
 		NULL, /* stroke */
 		NULL, /* private_data */
-		len+2+sizeof(uid)); /* private_data_len */
+		len+2+sizeof(idx)); /* private_data_len */
 	data[0] = (char)standard;
-	memcpy(data+1, &uid, sizeof(uid));
+	memcpy(data+1, &idx, sizeof(idx));
 	if (len)
-		memcpy(data+1+sizeof(uid), raw, len+1);
+		memcpy(data+1+sizeof(idx), raw, len+1);
 	else
-		data[1+sizeof(uid)] = 0;
+		data[1+sizeof(idx)] = 0;
 }
 
 static void
@@ -2028,7 +2030,6 @@ visible:
 				int cached;
 				fz_list_tile_data *data;
 				fz_rect tile_rect;
-				align_node_for_pointer(&node);
 				data = (fz_list_tile_data *)node;
 				tiled++;
 				tile_rect = data->view;
@@ -2052,7 +2053,6 @@ visible:
 				fz_set_default_colorspaces(ctx, dev, *(fz_default_colorspaces **)node);
 				break;
 			case FZ_CMD_BEGIN_LAYER:
-				align_node_for_pointer(&node);
 				fz_begin_layer(ctx, dev, (const char *)node);
 				break;
 			case FZ_CMD_END_LAYER:
@@ -2061,10 +2061,10 @@ visible:
 			case FZ_CMD_BEGIN_STRUCTURE:
 			{
 				const unsigned char *data;
-				int uid;
+				int idx;
 				data = (const unsigned char *)node;
-				memcpy(&uid, data+1, sizeof(uid));
-				fz_begin_structure(ctx, dev, (fz_structure)data[0], (const char *)(data[1+sizeof(uid)] == 0 ? NULL : &data[1+sizeof(uid)]), uid);
+				memcpy(&idx, data+1, sizeof(idx));
+				fz_begin_structure(ctx, dev, (fz_structure)data[0], (const char *)(&data[1+sizeof(idx)]), idx);
 				break;
 			}
 			case FZ_CMD_END_STRUCTURE:
@@ -2076,7 +2076,7 @@ visible:
 				const char *text;
 				data = (const unsigned char *)node;
 				text = (const char *)&data[1];
-				fz_begin_metatext(ctx, dev, (fz_metatext)data[0], (text[0] == 0 ? NULL : text));
+				fz_begin_metatext(ctx, dev, (fz_metatext)data[0], text);
 				break;
 			}
 			case FZ_CMD_END_METATEXT:

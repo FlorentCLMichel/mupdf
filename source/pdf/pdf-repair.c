@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -368,7 +368,8 @@ pdf_repair_xref(fz_context *ctx, pdf_document *doc)
 		fz_warn(ctx, "repairing PDF document");
 
 	if (doc->repair_attempted)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "Repair failed already - not trying again");
+		fz_throw(ctx, FZ_ERROR_FORMAT, "Repair failed already - not trying again");
+
 	doc->repair_attempted = 1;
 	doc->repair_in_progress = 1;
 
@@ -753,13 +754,14 @@ pdf_repair_obj_stms(fz_context *ctx, pdf_document *doc)
 				if (pdf_name_eq(ctx, pdf_dict_get(ctx, dict, PDF_NAME(Type)), PDF_NAME(ObjStm)))
 					pdf_repair_obj_stm(ctx, doc, i);
 			}
+			fz_always(ctx)
+				pdf_drop_obj(ctx, dict);
 			fz_catch(ctx)
 			{
 				fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
 				fz_report_error(ctx);
 				fz_warn(ctx, "ignoring broken object stream (%d 0 R)", i);
 			}
-			pdf_drop_obj(ctx, dict);
 		}
 	}
 

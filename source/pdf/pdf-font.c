@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2022 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -438,7 +438,7 @@ pdf_load_substitute_cjk_font(fz_context *ctx, pdf_font_desc *fontdesc, const cha
 }
 
 static struct { int ros, serif; const char *name; } known_cjk_fonts[] = {
-	{ FZ_ADOBE_GB, 0, "SimFang" },
+	{ FZ_ADOBE_GB, 1, "SimFang" },
 	{ FZ_ADOBE_GB, 0, "SimHei" },
 	{ FZ_ADOBE_GB, 1, "SimKai" },
 	{ FZ_ADOBE_GB, 1, "SimLi" },
@@ -1289,7 +1289,11 @@ load_cid_font(fz_context *ctx, pdf_document *doc, pdf_obj *dict, pdf_obj *encodi
 			}
 
 			if (fontdesc->to_ttf_cmap)
+			{
 				fz_warn(ctx, "non-embedded font using identity encoding: %s (mapping via %s)", basefont, fontdesc->to_ttf_cmap->cmap_name);
+				if (!fontdesc->to_unicode)
+					fontdesc->to_unicode = pdf_keep_cmap(ctx, fontdesc->to_ttf_cmap);
+			}
 			else
 				fz_warn(ctx, "non-embedded font using identity encoding: %s", basefont);
 		}

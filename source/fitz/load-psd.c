@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -180,6 +180,7 @@ psd_read_image(fz_context *ctx, struct info *info, const unsigned char *p, size_
 	memset(info, 0, sizeof(*info));
 
 	fz_var(image);
+	fz_var(seps);
 
 	fz_try(ctx)
 	{

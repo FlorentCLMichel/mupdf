@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2023 Artifex Software, Inc.
+// Copyright (C) 2004-2024 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -49,8 +49,10 @@ int pdfmerge_main(int argc, char *argv[]);
 int pdfsign_main(int argc, char *argv[]);
 int pdfrecolor_main(int argc, char *argv[]);
 int pdftrim_main(int argc, char *argv[]);
+int pdfbake_main(int argc, char *argv[]);
 
 int cmapdump_main(int argc, char *argv[]);
+int pdfaudit_main(int argc, char *argv[]);
 
 static struct {
 	int (*func)(int argc, char *argv[]);
@@ -75,6 +77,7 @@ static struct {
 	{ pdfrecolor_main, "recolor", "Change colorspace of pdf document" },
 	{ pdfsign_main, "sign", "manipulate PDF digital signatures" },
 	{ pdftrim_main, "trim", "trim PDF page contents" },
+	{ pdfbake_main, "bake", "bake PDF form into static content" },
 #endif
 #if FZ_ENABLE_JS
 	{ murun_main, "run", "run javascript" },
@@ -84,6 +87,7 @@ static struct {
 #ifndef NDEBUG
 	{ cmapdump_main, "cmapdump", "dump CMap resource as C source file" },
 #endif
+	{ pdfaudit_main, "audit", "Produce usage stats from PDF files" },
 #endif
 };
 
