@@ -540,8 +540,11 @@ static void open_stamp_image_dialog(void)
 			fz_var(img);
 			fz_try(ctx)
 			{
+				trace_action("tmp = new Image(%q);\n", stamp_image_filename);
 				img = fz_new_image_from_file(ctx, stamp_image_filename);
+				trace_action("annot.setAppearance(tmp);\n");
 				pdf_set_annot_stamp_image(ctx, ui.selected_annot, img);
+				trace_action("annot.setIcon(%q);\n", fz_basename(stamp_image_filename));
 				pdf_set_annot_icon_name(ctx, ui.selected_annot, fz_basename(stamp_image_filename));
 			}
 			fz_always(ctx)
@@ -1089,6 +1092,7 @@ void do_annotate_panel(void)
 			int q;
 			const char *text_lang;
 			const char *text_font;
+			char text_font_buf[20];
 			char lang_buf[8];
 			static float text_size_f, text_color[4];
 			static int text_size;
@@ -1112,10 +1116,10 @@ void do_annotate_panel(void)
 				pdf_set_annot_language(ctx, ui.selected_annot, fz_text_language_from_string(text_lang));
 			}
 
-			pdf_annot_default_appearance(ctx, ui.selected_annot, &text_font, &text_size_f, &n, text_color);
+			pdf_annot_default_appearance_unmapped(ctx, ui.selected_annot, text_font_buf, sizeof text_font_buf, &text_size_f, &n, text_color);
 			text_size = text_size_f;
 			ui_label("Text Font:");
-			font_choice = ui_select("DA/Font", text_font, font_names, nelem(font_names));
+			font_choice = ui_select("DA/Font", text_font_buf, font_names, nelem(font_names));
 			ui_label("Text Size: %d", text_size);
 			size_changed = ui_slider(&text_size, 8, 36, 256);
 			ui_label("Text Color:");
@@ -1124,6 +1128,8 @@ void do_annotate_panel(void)
 			{
 				if (font_choice != -1)
 					text_font = font_names[font_choice];
+				else
+					text_font = text_font_buf;
 				if (color_choice != -1)
 				{
 					n = 3;

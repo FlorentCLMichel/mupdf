@@ -486,6 +486,11 @@ static fz_pixmap *ffi_topixmap(js_State *J, int idx)
 	return (fz_pixmap *) js_touserdata(J, idx, "fz_pixmap");
 }
 
+static fz_image *ffi_toimage(js_State *J, int idx)
+{
+	return (fz_image *) js_touserdata(J, idx, "fz_image");
+}
+
 #if FZ_ENABLE_PDF
 
 static void ffi_pushobj(js_State *J, pdf_obj *obj);
@@ -3439,6 +3444,18 @@ static void ffi_Buffer_save(js_State *J)
 		rethrow(J);
 }
 
+static void ffi_Buffer_asString(js_State *J)
+{
+	fz_context *ctx = js_getcontext(J);
+	fz_buffer *buf = js_touserdata(J, 0, "fz_buffer");
+	const char *str = NULL;
+	fz_try(ctx)
+		str = fz_string_from_buffer(ctx, buf);
+	fz_catch(ctx)
+		rethrow(J);
+	js_pushstring(J, str);
+}
+
 static void ffi_Buffer_slice(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
@@ -3504,7 +3521,7 @@ static void ffi_Document_asPDF(js_State *J)
 	pdf_document *pdf;
 
 	fz_try(ctx)
-		pdf = fz_document_as_pdf(ctx, doc);
+		pdf = fz_new_pdf_document_from_fz_document(ctx, doc);
 	fz_catch(ctx)
 		rethrow(J);
 
@@ -5488,17 +5505,17 @@ static void ffi_DisplayList_search(js_State *J)
 	ffi_pushsearch(J, marks, hits, n);
 }
 
-static void ffi_StructuredText_walk(js_State *J)
+static void
+stext_walk(js_State *J, fz_stext_block *block)
 {
-	fz_stext_page *page = js_touserdata(J, 0, "fz_stext_page");
-	fz_stext_block *block;
 	fz_stext_line *line;
 	fz_stext_char *ch;
 
-	for (block = page->first_block; block; block = block->next)
+	while (block)
 	{
-		if (block->type == FZ_STEXT_BLOCK_IMAGE)
+		switch (block->type)
 		{
+		case FZ_STEXT_BLOCK_IMAGE:
 			if (js_hasproperty(J, 1, "onImageBlock"))
 			{
 				js_pushnull(J);
@@ -5508,9 +5525,8 @@ static void ffi_StructuredText_walk(js_State *J)
 				js_call(J, 3);
 				js_pop(J, 1);
 			}
-		}
-		else if (block->type == FZ_STEXT_BLOCK_TEXT)
-		{
+			break;
+		case FZ_STEXT_BLOCK_TEXT:
 			if (js_hasproperty(J, 1, "beginTextBlock"))
 			{
 				js_pushnull(J);
@@ -5563,8 +5579,39 @@ static void ffi_StructuredText_walk(js_State *J)
 				js_call(J, 0);
 				js_pop(J, 1);
 			}
+			break;
+		case FZ_STEXT_BLOCK_STRUCT:
+			if (block->u.s.down)
+			{
+				if (js_hasproperty(J, 1, "beginStruct"))
+				{
+					js_pushnull(J);
+					js_pushstring(J, fz_structure_to_string(block->u.s.down->standard));
+					js_pushstring(J, block->u.s.down->raw);
+					js_pushnumber(J, block->u.s.index);
+					js_call(J, 3);
+					js_pop(J, 1);
+				}
+				if (block->u.s.down)
+					stext_walk(J, block->u.s.down->first_block);
+				if (js_hasproperty(J, 1, "endStruct"))
+				{
+					js_pushnull(J);
+					js_call(J, 0);
+					js_pop(J, 1);
+				}
+			}
+			break;
 		}
+		block = block->next;
 	}
+}
+
+static void ffi_StructuredText_walk(js_State *J)
+{
+	fz_stext_page *page = js_touserdata(J, 0, "fz_stext_page");
+
+	stext_walk(J, page->first_block);
 }
 
 static void ffi_StructuredText_search(js_State *J)
@@ -6521,6 +6568,23 @@ static void ffi_PDFDocument_verifyEmbeddedFileChecksum(js_State *J)
 		rethrow(J);
 
 	js_pushboolean(J, valid);
+}
+
+static void ffi_PDFDocument_isEmbeddedFile(js_State *J)
+{
+	fz_context *ctx = js_getcontext(J);
+	pdf_document *pdf = js_touserdata(J, 0, "pdf_document");
+	pdf_obj *fs = ffi_toobj(J, pdf, 1);
+	int result = 0;
+
+	fz_try(ctx)
+		result = pdf_is_embedded_file(ctx, fs);
+	fz_always(ctx)
+		pdf_drop_obj(ctx, fs);
+	fz_catch(ctx)
+		rethrow(J);
+
+	js_pushboolean(J, result);
 }
 
 static void ffi_PDFDocument_addImage(js_State *J)
@@ -9458,12 +9522,20 @@ static void ffi_PDFAnnotation_setAppearance(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
 	pdf_annot *annot = ffi_toannot(J, 0);
-	const char *appearance = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
-	const char *state = js_iscoercible(J, 2) ? js_tostring(J, 2) : NULL;
-	fz_matrix ctm = ffi_tomatrix(J, 3);
 
-	if (js_isarray(J, 4))
+	if (js_isuserdata(J, 1, "fz_image"))
 	{
+		fz_image *img = ffi_toimage(J, 1);
+		fz_try(ctx)
+			pdf_set_annot_stamp_image(ctx, annot, img);
+		fz_catch(ctx)
+			rethrow(J);
+	}
+	else if (js_isarray(J, 4))
+	{
+		const char *appearance = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
+		const char *state = js_iscoercible(J, 2) ? js_tostring(J, 2) : NULL;
+		fz_matrix ctm = ffi_tomatrix(J, 3);
 		const char *contents;
 		pdf_document *pdf;
 		fz_buffer *buf;
@@ -9496,6 +9568,9 @@ static void ffi_PDFAnnotation_setAppearance(js_State *J)
 	}
 	else
 	{
+		const char *appearance = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
+		const char *state = js_iscoercible(J, 2) ? js_tostring(J, 2) : NULL;
+		fz_matrix ctm = ffi_tomatrix(J, 3);
 		fz_display_list *list = js_touserdata(J, 4, "fz_display_list");
 		fz_try(ctx)
 			pdf_set_annot_appearance_from_display_list(ctx, annot, appearance, state, ctm, list);
@@ -10440,6 +10515,7 @@ int murun_main(int argc, char **argv)
 		jsB_propfun(J, "Buffer.write", ffi_Buffer_write, 1);
 		jsB_propfun(J, "Buffer.save", ffi_Buffer_save, 1);
 		jsB_propfun(J, "Buffer.slice", ffi_Buffer_slice, 2);
+		jsB_propfun(J, "Buffer.asString", ffi_Buffer_asString, 0);
 	}
 	js_setregistry(J, "fz_buffer");
 
@@ -10827,6 +10903,7 @@ int murun_main(int argc, char **argv)
 		jsB_propfun(J, "PDFDocument.getFilespecParams", ffi_PDFDocument_getFilespecParams, 1);
 		jsB_propfun(J, "PDFDocument.getEmbeddedFileContents", ffi_PDFDocument_getEmbeddedFileContents, 1);
 		jsB_propfun(J, "PDFDocument.verifyEmbeddedFileChecksum", ffi_PDFDocument_verifyEmbeddedFileChecksum, 1);
+		jsB_propfun(J, "PDFDocument.isEmbeddedFile", ffi_PDFDocument_isEmbeddedFile, 1);
 
 		jsB_propfun(J, "PDFDocument.addPage", ffi_PDFDocument_addPage, 4);
 		jsB_propfun(J, "PDFDocument.insertPage", ffi_PDFDocument_insertPage, 2);
