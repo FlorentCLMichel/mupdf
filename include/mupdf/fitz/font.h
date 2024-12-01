@@ -733,6 +733,16 @@ void fz_hb_lock(fz_context *ctx);
 */
 void fz_hb_unlock(fz_context *ctx);
 
+/**
+	Callback for use in font cmap enumeration.
+*/
+typedef void (fz_cmap_callback)(fz_context *ctx, void *opaque, unsigned long ucs, unsigned int gid);
+
+/**
+	Enumerate a cmap using a callback.
+*/
+void fz_enumerate_font_cmap(fz_context *ctx, fz_font *font, fz_cmap_callback *cb, void *opaque);
+
 struct fz_font
 {
 	int refs;
@@ -748,6 +758,7 @@ struct fz_font
 	void *t3resources;
 	fz_buffer **t3procs; /* has 256 entries if used */
 	struct fz_display_list **t3lists; /* has 256 entries if used */
+	float *t3widths; /* has 256 entries if used */
 	unsigned short *t3flags; /* has 256 entries if used */
 	void *t3doc; /* a pdf_document for the callback */
 	void (*t3run)(fz_context *ctx, void *doc, void *resources, fz_buffer *contents, struct fz_device *dev, fz_matrix ctm, void *gstate, fz_default_colorspaces *default_cs);

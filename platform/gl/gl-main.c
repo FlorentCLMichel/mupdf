@@ -1388,6 +1388,7 @@ static void do_undo(void)
 
 	if (desired != -1 && desired != pos)
 	{
+		clear_selected_annot();
 		page_contents_changed = 1;
 		while (pos > desired)
 		{
@@ -1401,7 +1402,6 @@ static void do_undo(void)
 			pdf_redo(ctx, pdf);
 			pos++;
 		}
-		clear_selected_annot();
 		load_page();
 	}
 
@@ -3277,7 +3277,7 @@ int main(int argc, char **argv)
 	return 0;
 }
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
 	int argc;

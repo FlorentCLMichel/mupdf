@@ -106,6 +106,8 @@ typedef struct
 	int *gen_list;
 	int *renumber_map;
 
+	int bias; /* when saving incrementally to a file with garbage before the version marker */
+
 	/* The following extras are required for linearization */
 	int *rev_renumber_map;
 	int start;
@@ -583,6 +585,27 @@ objects_dump(fz_context *ctx, pdf_document *doc, pdf_write_state *opts)
  * Garbage collect objects not reachable from the trailer.
  */
 
+static void bake_stream_length(fz_context *ctx, pdf_document *doc, int num)
+{
+	if (pdf_obj_num_is_stream(ctx, doc, num))
+	{
+		pdf_obj *len;
+		pdf_obj *obj = NULL;
+		fz_var(obj);
+		fz_try(ctx)
+		{
+			obj = pdf_load_object(ctx, doc, num);
+			len = pdf_dict_get(ctx, obj, PDF_NAME(Length));
+			if (pdf_is_indirect(ctx, len))
+				pdf_dict_put_int(ctx, obj, PDF_NAME(Length), pdf_to_int(ctx, len));
+		}
+		fz_always(ctx)
+			pdf_drop_obj(ctx, obj);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+	}
+}
+
 /* Mark a reference. If it's been marked already, return NULL (as no further
  * processing is required). If it's not, return the resolved object so
  * that we can continue our recursive marking. If it's a duff reference
@@ -604,27 +627,6 @@ static pdf_obj *markref(fz_context *ctx, pdf_document *doc, pdf_write_state *opt
 		return NULL;
 
 	opts->use_list[num] = 1;
-
-	/* Bake in /Length in stream objects */
-	fz_try(ctx)
-	{
-		if (pdf_obj_num_is_stream(ctx, doc, num))
-		{
-			pdf_obj *len = pdf_dict_get(ctx, obj, PDF_NAME(Length));
-			if (pdf_is_indirect(ctx, len))
-			{
-				int num2 = pdf_to_num(ctx, len);
-				expand_lists(ctx, opts, num2+1);
-				opts->use_list[num2] = 0;
-				len = pdf_resolve_indirect(ctx, len);
-				pdf_dict_put(ctx, obj, PDF_NAME(Length), len);
-			}
-		}
-	}
-	fz_catch(ctx)
-	{
-		/* Leave broken */
-	}
 
 	obj = pdf_resolve_indirect(ctx, obj);
 	if (obj == NULL || pdf_is_null(ctx, obj))
@@ -2202,9 +2204,9 @@ static void writexrefsubsect(fz_context *ctx, pdf_write_state *opts, int from, i
 	for (num = from; num < to; num++)
 	{
 		if (opts->use_list[num])
-			fz_write_printf(ctx, opts->out, "%010lu %05d n \n", opts->ofs_list[num], opts->gen_list[num]);
+			fz_write_printf(ctx, opts->out, "%010lu %05d n \n", opts->ofs_list[num] - opts->bias, opts->gen_list[num]);
 		else
-			fz_write_printf(ctx, opts->out, "%010lu %05d f \n", opts->ofs_list[num], opts->gen_list[num]);
+			fz_write_printf(ctx, opts->out, "%010lu %05d f \n", opts->ofs_list[num] - opts->bias, opts->gen_list[num]);
 	}
 }
 
@@ -2254,7 +2256,7 @@ static void writexref(fz_context *ctx, pdf_document *doc, pdf_write_state *opts,
 			pdf_dict_put_int(ctx, trailer, PDF_NAME(Prev), doc->startxref);
 			pdf_dict_del(ctx, trailer, PDF_NAME(XRefStm));
 			if (!opts->do_snapshot)
-				doc->startxref = startxref;
+				doc->startxref = startxref - opts->bias;
 		}
 		else
 		{
@@ -2278,10 +2280,14 @@ static void writexref(fz_context *ctx, pdf_document *doc, pdf_write_state *opts,
 				if (obj)
 					pdf_dict_put(ctx, trailer, PDF_NAME(ID), obj);
 
+				/* The encryption dictionary is kept in the writer state to handle
+				   the encryption dictionary object being renumbered during repair.*/
 				if (opts->crypt_obj)
 				{
+					/* If the encryption dictionary used to be an indirect reference from the trailer,
+					   store it the same way in the trailer in the saved file. */
 					if (pdf_is_indirect(ctx, opts->crypt_obj))
-						pdf_dict_put_drop(ctx, trailer, PDF_NAME(Encrypt), pdf_new_indirect(ctx, doc, opts->crypt_object_number, 0));
+						pdf_dict_put_indirect(ctx, trailer, PDF_NAME(Encrypt), opts->crypt_object_number);
 					else
 						pdf_dict_put(ctx, trailer, PDF_NAME(Encrypt), opts->crypt_obj);
 				}
@@ -2298,7 +2304,7 @@ static void writexref(fz_context *ctx, pdf_document *doc, pdf_write_state *opts,
 		pdf_print_obj(ctx, opts->out, trailer, opts->do_tight, opts->do_ascii);
 		fz_write_string(ctx, opts->out, "\n");
 
-		fz_write_printf(ctx, opts->out, "startxref\n%lu\n%%%%EOF\n", startxref);
+		fz_write_printf(ctx, opts->out, "startxref\n%lu\n%%%%EOF\n", startxref - opts->bias);
 
 		doc->last_xref_was_old_style = 1;
 	}
@@ -2337,7 +2343,7 @@ static void writexrefstreamsubsect(fz_context *ctx, pdf_document *doc, pdf_write
 		else
 		{
 			f1 = 1; /* Object */
-			f2 = opts->ofs_list[num];
+			f2 = opts->ofs_list[num] - opts->bias;
 			f3 = opts->gen_list[num];
 		}
 		fz_append_byte(ctx, fzbuf, f1);
@@ -2387,11 +2393,16 @@ static void writexrefstream(fz_context *ctx, pdf_document *doc, pdf_write_state 
 			if (obj)
 				pdf_dict_put(ctx, dict, PDF_NAME(ID), obj);
 
-			if (opts->do_incremental)
+			/* The encryption dictionary is kept in the writer state to handle
+			   the encryption dictionary object being renumbered during repair.*/
+			if (opts->crypt_obj)
 			{
-				obj = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Encrypt));
-				if (obj)
-					pdf_dict_put(ctx, dict, PDF_NAME(Encrypt), obj);
+				/* If the encryption dictionary used to be an indirect reference from the trailer,
+				   store it the same way in the xref stream in the saved file. */
+				if (pdf_is_indirect(ctx, opts->crypt_obj))
+					pdf_dict_put_indirect(ctx, dict, PDF_NAME(Encrypt), opts->crypt_object_number);
+				else
+					pdf_dict_put(ctx, dict, PDF_NAME(Encrypt), opts->crypt_obj);
 			}
 		}
 
@@ -2401,12 +2412,12 @@ static void writexrefstream(fz_context *ctx, pdf_document *doc, pdf_write_state 
 		{
 			pdf_dict_put_int(ctx, dict, PDF_NAME(Prev), doc->startxref);
 			if (!opts->do_snapshot)
-				doc->startxref = startxref;
+				doc->startxref = startxref - opts->bias;
 		}
 		else
 		{
 			if (main_xref_offset != 0)
-				pdf_dict_put_int(ctx, dict, PDF_NAME(Prev), main_xref_offset);
+				pdf_dict_put_int(ctx, dict, PDF_NAME(Prev), main_xref_offset - opts->bias);
 		}
 
 		pdf_dict_put(ctx, dict, PDF_NAME(Type), PDF_NAME(XRef));
@@ -2454,7 +2465,7 @@ static void writexrefstream(fz_context *ctx, pdf_document *doc, pdf_write_state 
 		pdf_update_stream(ctx, doc, dict, fzbuf, 0);
 
 		writeobject(ctx, doc, opts, num, 0, 0, 1);
-		fz_write_printf(ctx, opts->out, "startxref\n%lu\n%%%%EOF\n", startxref);
+		fz_write_printf(ctx, opts->out, "startxref\n%lu\n%%%%EOF\n", startxref - opts->bias);
 
 		if (opts->do_snapshot)
 			pdf_delete_object(ctx, doc, num);
@@ -3658,7 +3669,9 @@ objstm_gather(fz_context *ctx, pdf_xref_entry *x, int i, pdf_document *doc, void
 	pdf_cache_object(ctx, doc, i);
 
 	if (x->type != 'n' || x->stm_buf != NULL || x->stm_ofs != 0 || x->gen != 0)
-		return; /* Ineligible for using an objstm */
+		return; /* Stream objects, objects with generation number != 0 cannot be put in objstms */
+	if (i == data->opts->crypt_object_number)
+		return; /* Encryption dictionaries can also not be put in objstms */
 
 	/* FIXME: Can we do a pass through to check for such objects more exactly? */
 	if (pdf_is_int(ctx, x->obj))
@@ -3799,10 +3812,18 @@ do_pdf_save_document(fz_context *ctx, pdf_document *doc, pdf_write_state *opts, 
 
 		/* Sweep & mark objects from the trailer */
 		if (opts->do_garbage >= 1 || opts->do_linear)
+		{
+			/* Start by removing indirect /Length attributes on streams */
+			for (num = 0; num < xref_len; num++)
+				bake_stream_length(ctx, doc, num);
+
 			(void)markobj(ctx, doc, opts, pdf_trailer(ctx, doc));
+		}
 		else
+		{
 			for (num = 0; num < xref_len; num++)
 				opts->use_list[num] = 1;
+		}
 
 		/* Coalesce and renumber duplicate objects */
 		if (opts->do_garbage >= 3)
@@ -3817,7 +3838,8 @@ do_pdf_save_document(fz_context *ctx, pdf_document *doc, pdf_write_state *opts, 
 		{
 			pdf_obj *crypt = pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Encrypt));
 			int crypt_num = pdf_to_num(ctx, crypt);
-			opts->crypt_object_number = opts->renumber_map[crypt_num];
+			if (crypt_num < opts->list_len)
+				opts->crypt_object_number = opts->renumber_map[crypt_num];
 		}
 
 		/* Make renumbering affect all indirect references and update xref */
@@ -4087,6 +4109,9 @@ void pdf_save_document(fz_context *ctx, pdf_document *doc, const char *filename,
 				fz_warn(ctx, "could not create annotation appearances");
 		}
 	}
+
+	if (in_opts->do_incremental)
+		opts.bias = doc->bias;
 
 	prepare_for_save(ctx, doc, in_opts);
 

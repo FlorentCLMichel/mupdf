@@ -921,20 +921,41 @@ pdf_version(fz_context *ctx, pdf_document *doc)
 static void
 pdf_load_version(fz_context *ctx, pdf_document *doc)
 {
-	char buf[20];
+	char buf[1024];
+	char *s = NULL;
+	size_t i, n;
 
+	/* look for '%PDF' version marker within first kilobyte of file */
 	fz_seek(ctx, doc->file, 0, SEEK_SET);
-	fz_read_line(ctx, doc->file, buf, sizeof buf);
-	if (strlen(buf) < 5 || (memcmp(buf, "%PDF-", 5) != 0 && memcmp(buf, "%FDF-", 5) != 0))
-		fz_throw(ctx, FZ_ERROR_FORMAT, "cannot recognize version marker");
+	n = fz_read(ctx, doc->file, (unsigned char*) buf, sizeof buf);
+	if (n < 5)
+		fz_throw(ctx, FZ_ERROR_FORMAT, "cannot find version marker");
+	buf[n-1] = 0;
+	for (i = 0; i < n - 5; i++)
+	{
+		if (memcmp(&buf[i], "%PDF-", 5) == 0 || memcmp(&buf[i], "%FDF-", 5) == 0)
+		{
+			s = buf + i;
+			break;
+		}
+	}
+	if (!s)
+		fz_throw(ctx, FZ_ERROR_FORMAT, "cannot find version marker");
 
-	if (buf[1] == 'F')
+	if (s[1] == 'F')
 		doc->is_fdf = 1;
 
-	doc->version = 10 * (fz_atof(buf+5) + 0.05f);
-	if (doc->version < 10 || doc->version > 17)
-		if (doc->version != 20)
-			fz_warn(ctx, "unknown PDF version: %d.%d", doc->version / 10, doc->version % 10);
+	doc->version = 10 * (fz_atof(s+5) + 0.05f);
+	if ((doc->version < 10 || doc->version > 17) && doc->version != 20)
+		fz_warn(ctx, "unknown PDF version: %d.%d", doc->version / 10, doc->version % 10);
+
+	if (s != buf)
+	{
+		fz_warn(ctx, "garbage bytes before version marker");
+		doc->bias = s - buf;
+	}
+
+	fz_seek(ctx, doc->file, doc->bias, SEEK_SET);
 }
 
 static void
@@ -1496,7 +1517,7 @@ pdf_read_xref(fz_context *ctx, pdf_document *doc, int64_t ofs)
 	pdf_obj *trailer;
 	int c;
 
-	fz_seek(ctx, doc->file, ofs, SEEK_SET);
+	fz_seek(ctx, doc->file, doc->bias + ofs, SEEK_SET);
 
 	while (iswhite(fz_peek_byte(ctx, doc->file)))
 		fz_read_byte(ctx, doc->file);
@@ -1869,10 +1890,10 @@ pdf_init_document(fz_context *ctx, pdf_document *doc)
 	{
 		if (repaired)
 		{
-			/* pdf_repair_xref may access xref_index, so reset it properly */
+			/* pdf_repair_xref_base may access xref_index, so reset it properly */
 			if (doc->xref_index)
 				memset(doc->xref_index, 0, sizeof(int) * doc->max_xref_len);
-			pdf_repair_xref(ctx, doc);
+			pdf_repair_xref_base(ctx, doc);
 			pdf_prime_xref_index(ctx, doc);
 		}
 
@@ -1886,6 +1907,7 @@ pdf_init_document(fz_context *ctx, pdf_document *doc)
 
 		if (repaired)
 		{
+			pdf_repair_obj_stms(ctx, doc);
 			pdf_repair_trailer(ctx, doc);
 		}
 	}
@@ -1903,7 +1925,6 @@ void pdf_repair_trailer(fz_context *ctx, pdf_document *doc)
 	int i;
 
 	int xref_len = pdf_xref_len(ctx, doc);
-	pdf_repair_obj_stms(ctx, doc);
 
 	hasroot = (pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Root)) != NULL);
 	hasinfo = (pdf_dict_get(ctx, pdf_trailer(ctx, doc), PDF_NAME(Info)) != NULL);
@@ -2224,6 +2245,12 @@ pdf_load_obj_stm(fz_context *ctx, pdf_document *doc, int num, pdf_lexbuf *buf, i
 				else
 				{
 					entry->obj = obj;
+					/* If we've just read a 'null' object, don't leave this as a NULL 'o' object,
+					 * as that will a) confuse the code that called us into thinking that nothing
+					 * was loaded, and b) cause the entire objstm to be reloaded every time that
+					 * object is acccessed. Instead, just mark it as an 'f'. */
+					if (obj == NULL)
+						entry->type = 'f';
 					fz_drop_buffer(ctx, entry->stm_buf);
 					entry->stm_buf = NULL;
 				}
@@ -2271,7 +2298,7 @@ pdf_obj_read(fz_context *ctx, pdf_document *doc, int64_t *offset, int *nump, pdf
 	pdf_xref_entry *entry;
 
 	numofs = *offset;
-	fz_seek(ctx, doc->file, numofs, SEEK_SET);
+	fz_seek(ctx, doc->file, doc->bias + numofs, SEEK_SET);
 
 	/* We expect to read 'num' here */
 	tok = pdf_lex(ctx, doc->file, buf);
@@ -2507,7 +2534,7 @@ pdf_load_unencrypted_object(fz_context *ctx, pdf_document *doc, int num)
 	x = pdf_get_xref_entry_no_null(ctx, doc, num);
 	if (x->type == 'n')
 	{
-		fz_seek(ctx, doc->file, x->ofs, SEEK_SET);
+		fz_seek(ctx, doc->file, doc->bias + x->ofs, SEEK_SET);
 		return pdf_parse_ind_obj(ctx, doc, doc->file, NULL, NULL, NULL, NULL);
 	}
 	return NULL;
@@ -2541,7 +2568,7 @@ object_updated:
 	}
 	else if (x->type == 'n')
 	{
-		fz_seek(ctx, doc->file, x->ofs, SEEK_SET);
+		fz_seek(ctx, doc->file, doc->bias + x->ofs, SEEK_SET);
 
 		fz_try(ctx)
 		{
@@ -2575,7 +2602,7 @@ object_updated:
 perform_repair:
 			fz_try(ctx)
 			{
-				pdf_repair_xref(ctx, doc);
+				pdf_repair_xref_base(ctx, doc);
 				pdf_prime_xref_index(ctx, doc);
 				pdf_repair_obj_stms(ctx, doc);
 				pdf_repair_trailer(ctx, doc);
@@ -3387,7 +3414,7 @@ pdf_load_hints(fz_context *ctx, pdf_document *doc, int objnum)
 		}
 		/* Skip items 5,6,7 as we don't use them */
 
-		fz_seek(ctx, stream, shared_hint_offset, SEEK_SET);
+		fz_seek(ctx, stream, doc->bias + shared_hint_offset, SEEK_SET);
 
 		/* Read the shared object hints table: Header first */
 		shared_obj_num = fz_read_bits(ctx, stream, 32);
@@ -3507,7 +3534,7 @@ pdf_load_hint_object(fz_context *ctx, pdf_document *doc)
 	int64_t curr_pos;
 
 	curr_pos = fz_tell(ctx, doc->file);
-	fz_seek(ctx, doc->file, doc->hint_object_offset, SEEK_SET);
+	fz_seek(ctx, doc->file, doc->bias + doc->hint_object_offset, SEEK_SET);
 	fz_try(ctx)
 	{
 		while (1)
@@ -5096,7 +5123,7 @@ int pdf_validate_signature(fz_context *ctx, pdf_annot *widget)
 	int o_xref_base;
 
 	if (!widget->page)
-		fz_throw(ctx, FZ_ERROR_GENERIC, "annotation not bound to any page");
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "annotation not bound to any page");
 
 	doc = widget->page->doc;
 	unsaved_versions = pdf_count_unsaved_versions(ctx, doc);
@@ -5343,4 +5370,12 @@ void pdf_minimize_document(fz_context *ctx, pdf_document *doc)
 			}
 		}
 	}
+}
+
+void pdf_repair_xref(fz_context *ctx, pdf_document *doc)
+{
+	pdf_repair_xref_base(ctx, doc);
+	pdf_prime_xref_index(ctx, doc);
+	pdf_repair_obj_stms(ctx, doc);
+	pdf_repair_trailer(ctx, doc);
 }
