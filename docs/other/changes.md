@@ -26,6 +26,14 @@ update between versions.
 
 > The changes listed below only affect *existing* APIs.
 
+## Changes from 1.27 to 1.28
+
+- Setting overprint simulation in mutool draw moved from -O to -M.
+- The mutool draw command now accepts device specific options with -O.
+- PDF write option "decrypt" is deprecated; use "encrypt=none" instead.
+- `pdf_validate_signature` renamed `pdf_validate_signature_widget`. The
+  new `pdf_validate_signature` operates directly on a signature field.
+
 ## Changes from 1.26 to 1.27
 
 - Use `fz_quad` in `fz_warp_pixmap`, `fz_autowarp_pixmap`, and `fz_detect_document`.

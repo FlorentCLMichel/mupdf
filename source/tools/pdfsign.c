@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -62,6 +62,7 @@ static void verify_signature(fz_context *ctx, pdf_document *doc, pdf_obj *signat
 	pdf_pkcs7_verifier *verifier;
 	int edits;
 	pdf_pkcs7_distinguished_name *dn = NULL;
+	int valid_until;
 
 	printf("Verifying signature %d:\n", pdf_to_num(ctx, signature));
 
@@ -101,6 +102,18 @@ static void verify_signature(fz_context *ctx, pdf_document *doc, pdf_obj *signat
 			printf("\tThe signature is valid but there have been edits since signing.\n");
 		else
 			printf("\tThe document is unchanged since signing.\n");
+
+		valid_until = pdf_validate_signature(ctx, doc, signature);
+		if (valid_until < 0)
+			printf("\tThe fields signed by this signature have unsaved changes that will invalidate the signature.\n");
+		else if (valid_until == 0)
+			printf("\tThe fields signed by this signature are unchanged.\n");
+		else if (valid_until == 1)
+			printf("\tThis signature was invalidated in the last update by the signed fields being changed.\n");
+		else if (valid_until == 2)
+			printf("\tThis signature was invalidated in the penultimate update by the signed fields being changed.\n");
+		else
+			printf("\tThis signature was invalidated %d updates ago by the signed fields being changed.\n", valid_until);
 	}
 	fz_always(ctx)
 	{
@@ -346,7 +359,7 @@ int pdfsign_main(int argc, char **argv)
 			if (!process_acro_form(ctx, doc))
 			{
 				fprintf(stderr, "No signatures found!\n");
-				exit(1);
+				break;
 			}
 		}
 		else

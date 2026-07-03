@@ -17,6 +17,7 @@ As you can tell by the name, we support reading PDF files. But that's not all!
 - ComicBook (CBZ and CBT)
 - Images (TIFF, JPEG, PNG, etc)
 - SVG (a limited subset only)
+- Markdown (MD)
 
 ## Viewers
 
@@ -53,11 +54,9 @@ Android currently has two different viewers with varying degrees of complexity:
 
 ### Web Browser
 
-There's a simple
-<a href="https://mupdf.com/wasm/demo/?file=/docs/mupdf_explored.pdf">WebAssembly demo</a>
-that runs MuPDF in the browser.
-
 There's also a commercial license only <a href="https://webviewer.mupdf.com/">MuPDF WebViewer</a> product.
+
+Here is a <a href="https://mupdf.com/wasm/demo/?file=/docs/mupdf_explored.pdf">demo</a> of it.
 
 ### Third party viewers
 

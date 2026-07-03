@@ -29,15 +29,19 @@
 
 typedef enum
 {
+	/* These bits represent the pending state we might need to flush. */
 	FLUSH_CTM = 1,
 	FLUSH_COLOR_F = 2,
 	FLUSH_COLOR_S = 4,
 	FLUSH_TEXT = 8,
 	FLUSH_OP = 16,
+	FLUSH_STROKE_STATE = 32,
 
+	/* These combinations of bits represent the reasons why we might need to flush. */
 	FLUSH_ALL = 15,
-	FLUSH_STROKE = 1+4,
-	FLUSH_FILL = 1+2
+	FLUSH_STROKE = FLUSH_CTM + FLUSH_COLOR_S + FLUSH_STROKE_STATE,
+	FLUSH_FILL = FLUSH_CTM + FLUSH_COLOR_F,
+	FLUSH_CLIP = FLUSH_CTM + FLUSH_TEXT + FLUSH_OP
 } gstate_flush_flags;
 
 typedef struct pdf_filter_gstate_sc
@@ -64,6 +68,8 @@ typedef struct pdf_filter_gstate
 		fz_linejoin linejoin;
 		float linewidth;
 		float miterlimit;
+		float phase;
+		pdf_obj *dash;
 	} stroke;
 	pdf_text_state text;
 } pdf_filter_gstate;
@@ -83,6 +89,8 @@ typedef struct filter_gstate
 	pdf_filter_gstate pending;
 	pdf_filter_gstate sent;
 	clip_op_t clip_op;
+	/* The current leading value that the caller assumes. */
+	float leading;
 	/* Opacity values are not queued, so don't go into pending/sent.
 	 * We only track these for invisible text removal. */
 	float ca;
@@ -119,14 +127,11 @@ typedef struct
 	pdf_obj *structarray;
 	filter_gstate *gstate;
 	pdf_text_object_state tos;
-	/* If Td_pending, then any Tm_pending can be ignored and we can just
-	 * send a Td with Td_value rather than the Tm. */
-	int Td_pending;
-	fz_point Td_value;
-	int Tm_pending;
+	fz_matrix sent_tlm;
+	fz_matrix sent_tm;
+	float Tm_adjust;
 	int BT_pending;
 	int in_BT;
-	float Tm_adjust;
 	tag_record *current_tags;
 	tag_record *pending_tags;
 	pdf_resource_stack *new_rstack;
@@ -196,10 +201,36 @@ filter_push(fz_context *ctx, pdf_sanitize_processor *p)
 	new_gstate->next = gstate;
 	p->gstate = new_gstate;
 
+	fz_keep_colorspace(ctx, gstate->pending.CS.cs);
+	fz_keep_colorspace(ctx, gstate->pending.cs.cs);
 	pdf_keep_font(ctx, new_gstate->pending.text.font);
 	fz_keep_string(ctx, new_gstate->pending.text.fontname);
+	fz_keep_colorspace(ctx, gstate->sent.CS.cs);
+	fz_keep_colorspace(ctx, gstate->sent.cs.cs);
 	pdf_keep_font(ctx, new_gstate->sent.text.font);
 	fz_keep_string(ctx, new_gstate->sent.text.fontname);
+	pdf_keep_obj(ctx, new_gstate->pending.stroke.dash);
+	pdf_keep_obj(ctx, new_gstate->sent.stroke.dash);
+}
+
+static void
+drop_gstate(fz_context *ctx, pdf_sanitize_processor *p)
+{
+	filter_gstate *gstate = p->gstate;
+	filter_gstate *old = gstate->next;
+
+	fz_drop_colorspace(ctx, gstate->pending.CS.cs);
+	fz_drop_colorspace(ctx, gstate->pending.cs.cs);
+	pdf_drop_font(ctx, gstate->pending.text.font);
+	fz_drop_string(ctx, gstate->pending.text.fontname);
+	fz_drop_colorspace(ctx, gstate->sent.CS.cs);
+	fz_drop_colorspace(ctx, gstate->sent.cs.cs);
+	pdf_drop_font(ctx, gstate->sent.text.font);
+	fz_drop_string(ctx, gstate->sent.text.fontname);
+	pdf_drop_obj(ctx, gstate->pending.stroke.dash);
+	pdf_drop_obj(ctx, gstate->sent.stroke.dash);
+	fz_free(ctx, gstate);
+	p->gstate = old;
 }
 
 static int
@@ -216,12 +247,7 @@ filter_pop(fz_context *ctx, pdf_sanitize_processor *p)
 		if (p->super.chain->op_Q)
 			p->super.chain->op_Q(ctx, p->super.chain);
 
-	pdf_drop_font(ctx, gstate->pending.text.font);
-	fz_drop_string(ctx, gstate->pending.text.fontname);
-	pdf_drop_font(ctx, gstate->sent.text.font);
-	fz_drop_string(ctx, gstate->sent.text.fontname);
-	fz_free(ctx, gstate);
-	p->gstate = old;
+	drop_gstate(ctx, p);
 	return 0;
 }
 
@@ -273,9 +299,13 @@ ensure_pushed(fz_context *ctx, pdf_sanitize_processor *p)
 	 * So put, gstate->pending back to sanity. */
 	pdf_drop_font(ctx, gstate->pending.text.font);
 	fz_drop_string(ctx, gstate->pending.text.fontname);
+	fz_drop_colorspace(ctx, gstate->pending.CS.cs);
+	fz_drop_colorspace(ctx, gstate->pending.cs.cs);
 	gstate->pending = p->gstate->next->sent;
 	pdf_keep_font(ctx, gstate->pending.text.font);
 	fz_keep_string(ctx, gstate->pending.text.fontname);
+	fz_keep_colorspace(ctx, gstate->pending.CS.cs);
+	fz_keep_colorspace(ctx, gstate->pending.cs.cs);
 
 	return p->gstate;
 }
@@ -294,6 +324,15 @@ static void filter_flush(fz_context *ctx, pdf_sanitize_processor *p, int flush)
 
 	if (flush & FLUSH_OP)
 		gstate = ensure_pushed(ctx, p);
+
+	if (flush & FLUSH_TEXT)
+	{
+		int sane_tr = gstate->pending.text.render+1;
+		if (sane_tr & 1)
+			flush |= FLUSH_COLOR_F;
+		if (sane_tr & 2)
+			flush |= FLUSH_COLOR_S;
+	}
 
 	if (flush & FLUSH_CTM)
 	{
@@ -402,7 +441,9 @@ static void filter_flush(fz_context *ctx, pdf_sanitize_processor *p, int flush)
 		}
 
 done_sc:
+		fz_drop_colorspace(ctx, gstate->sent.cs.cs);
 		gstate->sent.cs = gstate->pending.cs;
+		fz_keep_colorspace(ctx, gstate->sent.cs.cs);
 		gstate->sent.sc = gstate->pending.sc;
 	}
 
@@ -485,11 +526,13 @@ done_sc:
 		}
 
 done_SC:
+		fz_drop_colorspace(ctx, gstate->sent.CS.cs);
 		gstate->sent.CS = gstate->pending.CS;
+		fz_keep_colorspace(ctx, gstate->sent.CS.cs);
 		gstate->sent.SC = gstate->pending.SC;
 	}
 
-	if (flush & FLUSH_STROKE)
+	if (flush & FLUSH_STROKE_STATE)
 	{
 		if (gstate->pending.stroke.linecap != gstate->sent.stroke.linecap)
 		{
@@ -515,7 +558,16 @@ done_SC:
 			if (p->super.chain->op_M)
 				p->super.chain->op_M(ctx, p->super.chain, gstate->pending.stroke.miterlimit);
 		}
+		if (gstate->pending.stroke.phase != gstate->sent.stroke.phase ||
+			pdf_objcmp(ctx, gstate->pending.stroke.dash, gstate->sent.stroke.dash))
+		{
+			gstate = ensure_pushed(ctx, p);
+			if (p->super.chain->op_d)
+				p->super.chain->op_d(ctx, p->super.chain, gstate->pending.stroke.dash, gstate->pending.stroke.phase);
+		}
+		pdf_drop_obj(ctx, gstate->sent.stroke.dash);
 		gstate->sent.stroke = gstate->pending.stroke;
+		gstate->sent.stroke.dash = pdf_keep_obj(ctx, gstate->sent.stroke.dash);
 	}
 
 	if (flush & FLUSH_TEXT)
@@ -532,6 +584,7 @@ done_SC:
 		}
 		if (p->in_BT)
 		{
+			float t;
 			if (gstate->pending.text.char_space != gstate->sent.text.char_space)
 			{
 				gstate = ensure_pushed(ctx, p);
@@ -550,12 +603,6 @@ done_SC:
 				gstate = ensure_pushed(ctx, p);
 				if (p->super.chain->op_Tz)
 					p->super.chain->op_Tz(ctx, p->super.chain, gstate->pending.text.scale*100);
-			}
-			if (gstate->pending.text.leading != gstate->sent.text.leading)
-			{
-				gstate = ensure_pushed(ctx, p);
-				if (p->super.chain->op_TL)
-					p->super.chain->op_TL(ctx, p->super.chain, gstate->pending.text.leading);
 			}
 			if (gstate->pending.text.font != gstate->sent.text.font ||
 				gstate->pending.text.size != gstate->sent.text.size ||
@@ -579,24 +626,87 @@ done_SC:
 			}
 			pdf_drop_font(ctx, gstate->sent.text.font);
 			fz_drop_string(ctx, gstate->sent.text.fontname);
+			/* Everything has been sent except leading. */
+			t = gstate->sent.text.leading;
 			gstate->sent.text = gstate->pending.text;
+			gstate->sent.text.leading = t;
 			gstate->sent.text.font = pdf_keep_font(ctx, gstate->pending.text.font);
 			gstate->sent.text.fontname = fz_keep_string(ctx, gstate->pending.text.fontname);
+			copy_resource(ctx, p, PDF_NAME(Font), fz_cstring_from_string(gstate->sent.text.fontname));
 
-			if (p->Td_pending != 0)
+			if (p->tos.tlm.a != p->sent_tlm.a ||
+				p->tos.tlm.b != p->sent_tlm.b ||
+				p->tos.tlm.c != p->sent_tlm.c ||
+				p->tos.tlm.d != p->sent_tlm.d ||
+				p->tos.tlm.e != p->sent_tlm.e ||
+				p->tos.tlm.f != p->sent_tlm.f)
 			{
 				gstate = ensure_pushed(ctx, p);
-				if (p->super.chain->op_Td)
-					p->super.chain->op_Td(ctx, p->super.chain, p->Td_value.x, p->Td_value.y);
-				p->Tm_pending = 0;
-				p->Td_pending = 0;
-			}
-			else if (p->Tm_pending != 0)
-			{
-				gstate = ensure_pushed(ctx, p);
+				if (p->tos.tlm.a == p->sent_tlm.a &&
+					p->tos.tlm.b == p->sent_tlm.b &&
+					p->tos.tlm.c == p->sent_tlm.c &&
+					p->tos.tlm.d == p->sent_tlm.d)
+				{
+					/* We just differ in e and f. */
+					float X = p->tos.tlm.e - p->sent_tlm.e;
+					float Y = p->tos.tlm.f - p->sent_tlm.f;
+
+					/* So, can we use a Td here? */
+					/* A Td does the following update:
+					 *   Tm = Tlm = ( 1  0  0 ) x Tlm
+					 *              ( 0  1  0 )
+					 *              ( tx ty 0 )
+					 * so:
+					 *   Tlm.e += Tlm.a * tx + Tlm.c * ty
+					 *   Tlm.f += Tlm.b * tx + Tlm.d * ty
+					 * or:
+					 *   X = Tlm.a * tx + Tlm.c * ty
+					 *   Y = Tlm.b * tx + Tlm.d * ty
+					 *   Tlm.e += X
+					 *   Tlm.f += Y
+					 * We can get X and Y easily from looking at Tlm vs sent_Tlm,
+					 * but we really want tx and ty. So, notice that:
+					 *   (X,Y) = ( tx ty ) ( Tlm.a Tlm.b )
+					 *                     ( Tlm.c Tlm.d )
+					 * So, let's find the inverse matrix, and reverse that.
+					 * Then:
+					 *   (tx ty) = (1/det) (X Y) ( Tlm.d  -Tlm.b)
+					 *                           (-Tlm.c   Tlm.a)
+					 */
+					float det = p->tos.tlm.a * p->tos.tlm.d - p->tos.tlm.b * p->tos.tlm.c;
+					if (det < -0.001 || det > 0.001)
+					{
+						float scale = 1/det;
+						float tx = scale * (X *  p->tos.tlm.d - Y * p->tos.tlm.c);
+						float ty = scale * (X * -p->tos.tlm.b + Y * p->tos.tlm.a);
+
+						if (tx == 0 && ty == 0)
+						{
+							/* Nothing to do! */
+							goto sorted;
+						}
+						else if (tx == 0 && gstate->sent.text.leading == -ty)
+						{
+							/* We can send this using T*! */
+							if (p->super.chain->op_Tstar)
+								p->super.chain->op_Tstar(ctx, p->super.chain);
+							goto sorted;
+						}
+						else
+						{
+							gstate->sent.text.leading = -ty;
+							gstate->pending.text.leading = -ty;
+							if (p->super.chain->op_TD)
+								p->super.chain->op_TD(ctx, p->super.chain, tx, ty);
+							goto sorted;
+						}
+					}
+				}
+				/* Otherwise, we need to set Tm directly. */
 				if (p->super.chain->op_Tm)
 					p->super.chain->op_Tm(ctx, p->super.chain, p->tos.tlm.a, p->tos.tlm.b, p->tos.tlm.c, p->tos.tlm.d, p->tos.tlm.e, p->tos.tlm.f);
-				p->Tm_pending = 0;
+sorted:{}
+				p->sent_tlm = p->tos.tlm;
 			}
 		}
 	}
@@ -1046,48 +1156,48 @@ static void
 pdf_filter_w(fz_context *ctx, pdf_processor *proc, float linewidth)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	filter_gstate *gstate = p->gstate;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	gstate->pending.stroke.linewidth = linewidth;
+	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->pending.stroke.linewidth = linewidth;
 }
 
 static void
 pdf_filter_j(fz_context *ctx, pdf_processor *proc, int linejoin)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	filter_gstate *gstate = p->gstate;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	gstate->pending.stroke.linejoin = linejoin;
+	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->pending.stroke.linejoin = linejoin;
 }
 
 static void
 pdf_filter_J(fz_context *ctx, pdf_processor *proc, int linecap)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	filter_gstate *gstate = p->gstate;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	gstate->pending.stroke.linecap = linecap;
+	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->pending.stroke.linecap = linecap;
 }
 
 static void
 pdf_filter_M(fz_context *ctx, pdf_processor *proc, float miterlimit)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	filter_gstate *gstate = p->gstate;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	gstate->pending.stroke.miterlimit = miterlimit;
+	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->pending.stroke.miterlimit = miterlimit;
 }
 
 static void
@@ -1098,9 +1208,9 @@ pdf_filter_d(fz_context *ctx, pdf_processor *proc, pdf_obj *array, float phase)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	filter_flush(ctx, p, FLUSH_OP);
-	if (p->super.chain->op_d)
-		p->super.chain->op_d(ctx, p->super.chain, array, phase);
+	pdf_drop_obj(ctx, p->gstate->pending.stroke.dash);
+	p->gstate->pending.stroke.dash = pdf_keep_obj(ctx, array);
+	p->gstate->pending.stroke.phase = phase;
 }
 
 static void
@@ -1203,6 +1313,7 @@ pdf_filter_gs_BM(fz_context *ctx, pdf_processor *proc, const char *blendmode)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	if (p->super.chain->op_gs_BM)
 		p->super.chain->op_gs_BM(ctx, p->super.chain, blendmode);
 }
@@ -1212,6 +1323,7 @@ pdf_filter_gs_CA(fz_context *ctx, pdf_processor *proc, float alpha)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	p->gstate->CA = alpha;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
@@ -1226,6 +1338,7 @@ pdf_filter_gs_ca(fz_context *ctx, pdf_processor *proc, float alpha)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	p->gstate->ca = alpha;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
@@ -1243,6 +1356,7 @@ pdf_filter_gs_SMask(fz_context *ctx, pdf_processor *proc, pdf_obj *smask, fz_col
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	if (p->super.chain->op_gs_SMask)
 		p->super.chain->op_gs_SMask(ctx, p->super.chain, smask, smask_cs, bc, luminosity, tr);
 }
@@ -1470,7 +1584,11 @@ end_segment(fz_context *ctx, segmenter_data_t *sd)
 	st = (sd->type == FZ_CULL_PATH_STROKE || sd->type == FZ_CULL_PATH_FILL_STROKE) ? sd->sstate : NULL;
 	r = fz_bound_path(ctx, sd->segment, st, sd->ctm);
 
-	if (sd->p->options->culler && sd->p->options->culler(ctx, sd->p->options->opaque, r, sd->type))
+	if (!fz_is_valid_rect(r))
+	{
+		/* This segment can be skipped */
+	}
+	else if (sd->p->options->culler && sd->p->options->culler(ctx, sd->p->options->opaque, r, sd->type))
 	{
 		/* This segment can be skipped */
 	}
@@ -1741,7 +1859,7 @@ pdf_filter_B(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL))
+	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
 	if (p->super.chain->op_B)
@@ -1756,7 +1874,7 @@ pdf_filter_Bstar(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL))
+	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
 	if (p->super.chain->op_Bstar)
@@ -1771,7 +1889,7 @@ pdf_filter_b(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL))
+	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
 	if (p->super.chain->op_b)
@@ -1786,7 +1904,7 @@ pdf_filter_bstar(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL))
+	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
 	if (p->super.chain->op_bstar)
@@ -1801,7 +1919,7 @@ pdf_filter_n(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	if (cull_path(ctx, p, FZ_CULL_PATH_DROP, FLUSH_ALL))
+	if (cull_path(ctx, p, FZ_CULL_PATH_DROP, (p->gstate->clip_op == NO_CLIP_OP ? FLUSH_OP : FLUSH_CLIP)))
 		return;
 
 	if (p->super.chain->op_n)
@@ -1849,11 +1967,11 @@ pdf_filter_BT(fz_context *ctx, pdf_processor *proc)
 	filter_flush(ctx, p, 0);
 	p->tos.tm = fz_identity;
 	p->tos.tlm = fz_identity;
+	p->sent_tm = fz_identity;
+	p->sent_tlm = fz_identity;
 	p->BT_pending = 1;
 	p->text_sent = 0;
 	p->text_removed = 0;
-	p->Td_pending = 0;
-	p->Td_value.x = p->Td_value.y = 0;
 }
 
 static void
@@ -1955,6 +2073,7 @@ pdf_filter_TL(fz_context *ctx, pdf_processor *proc, float leading)
 		return;
 
 	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->leading = leading;
 	p->gstate->pending.text.leading = leading;
 }
 
@@ -1973,7 +2092,6 @@ pdf_filter_Tf(fz_context *ctx, pdf_processor *proc, const char *name, pdf_font_d
 	pdf_drop_font(ctx, p->gstate->pending.text.font);
 	p->gstate->pending.text.font = pdf_keep_font(ctx, font);
 	p->gstate->pending.text.size = size;
-	copy_resource(ctx, p, PDF_NAME(Font), name);
 }
 
 static void
@@ -2011,14 +2129,8 @@ pdf_filter_Td(fz_context *ctx, pdf_processor *proc, float tx, float ty)
 		return;
 
 	p->Tm_adjust = 0;
+	filter_flush(ctx, p, FLUSH_OP);
 	pdf_tos_translate(&p->tos, tx, ty);
-	if (p->Tm_pending)
-		return; /* Exit, just with Tm_pending */
-	if (p->Td_pending)
-		tx += p->Td_value.x, ty += p->Td_value.y;
-	p->Td_value.x = tx;
-	p->Td_value.y = ty;
-	p->Td_pending = 1;
 }
 
 static void
@@ -2029,7 +2141,8 @@ pdf_filter_TD(fz_context *ctx, pdf_processor *proc, float tx, float ty)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
-	p->gstate->pending.text.leading = -ty;
+	filter_flush(ctx, p, FLUSH_OP);
+	p->gstate->leading = -ty;
 	pdf_filter_Td(ctx, proc, tx, ty);
 }
 
@@ -2041,9 +2154,8 @@ pdf_filter_Tm(fz_context *ctx, pdf_processor *proc, float a, float b, float c, f
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	pdf_tos_set_matrix(&p->tos, a, b, c, d, e, f);
-	p->Tm_pending = 1;
-	p->Td_pending = 0;
 	p->Tm_adjust = 0;
 }
 
@@ -2055,14 +2167,9 @@ pdf_filter_Tstar(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	filter_flush(ctx, p, FLUSH_OP);
 	p->Tm_adjust = 0;
-	filter_flush(ctx, p, FLUSH_ALL);
-	pdf_tos_newline(&p->tos, p->gstate->pending.text.leading);
-	/* If Tm_pending, then just adjusting the matrix (as
-	 * pdf_tos_newline has done) is enough. Otherwise we
-	 * need to actually call the operator. */
-	if (!p->Tm_pending && p->super.chain->op_Tstar)
-		p->super.chain->op_Tstar(ctx, p->super.chain);
+	pdf_tos_newline(&p->tos, p->gstate->leading);
 }
 
 /* text showing */
@@ -2103,11 +2210,6 @@ pdf_filter_squote(fz_context *ctx, pdf_processor *proc, char *str, size_t len)
 	filter_flush(ctx, p, FLUSH_ALL);
 
 	pdf_tos_newline(&p->tos, p->gstate->pending.text.leading);
-	/* If Tm_pending, then just adjusting the matrix (as
-	 * pdf_tos_newline has done) is enough. Otherwise we
-	 * need to do it manually. */
-	if (!p->Tm_pending && p->super.chain->op_Tstar)
-		p->super.chain->op_Tstar(ctx, p->super.chain);
 	filter_show_string(ctx, p, (unsigned char *)str, len);
 }
 
@@ -2128,11 +2230,6 @@ pdf_filter_dquote(fz_context *ctx, pdf_processor *proc, float aw, float ac, char
 	p->gstate->pending.text.word_space = aw;
 	p->gstate->pending.text.char_space = ac;
 	pdf_tos_newline(&p->tos, p->gstate->pending.text.leading);
-	/* If Tm_pending, then just adjusting the matrix (as
-	 * pdf_tos_newline has done) is enough. Otherwise we
-	 * need to do it manually. */
-	if (!p->Tm_pending && p->super.chain->op_Tstar)
-		p->super.chain->op_Tstar(ctx, p->super.chain);
 	filter_show_string(ctx, p, (unsigned char*)str, len);
 }
 
@@ -2216,7 +2313,8 @@ pdf_filter_CS(fz_context *ctx, pdf_processor *proc, const char *name, fz_colorsp
 		return;
 
 	fz_strlcpy(gstate->pending.CS.name, name, sizeof gstate->pending.CS.name);
-	gstate->pending.CS.cs = cs;
+	fz_drop_colorspace(ctx, gstate->pending.CS.cs);
+	gstate->pending.CS.cs = fz_keep_colorspace(ctx, cs);
 	copy_resource(ctx, p, PDF_NAME(ColorSpace), name);
 	set_default_cs_values(&gstate->pending.SC, name, cs);
 }
@@ -2231,7 +2329,8 @@ pdf_filter_cs(fz_context *ctx, pdf_processor *proc, const char *name, fz_colorsp
 		return;
 
 	fz_strlcpy(gstate->pending.cs.name, name, sizeof gstate->pending.cs.name);
-	gstate->pending.cs.cs = cs;
+	fz_drop_colorspace(ctx, gstate->pending.cs.cs);
+	gstate->pending.cs.cs = fz_keep_colorspace(ctx, cs);
 	copy_resource(ctx, p, PDF_NAME(ColorSpace), name);
 	set_default_cs_values(&gstate->pending.sc, name, cs);
 }
@@ -2783,18 +2882,9 @@ static void
 pdf_drop_sanitize_processor(fz_context *ctx, pdf_processor *proc)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	filter_gstate *gs = p->gstate;
 
-	while (gs)
-	{
-		filter_gstate *next = gs->next;
-		pdf_drop_font(ctx, gs->pending.text.font);
-		fz_drop_string(ctx, gs->pending.text.fontname);
-		pdf_drop_font(ctx, gs->sent.text.font);
-		fz_drop_string(ctx, gs->sent.text.fontname);
-		fz_free(ctx, gs);
-		gs = next;
-	}
+	while (p->gstate)
+		drop_gstate(ctx, p);
 
 	while (p->new_rstack)
 	{
@@ -2808,6 +2898,9 @@ pdf_drop_sanitize_processor(fz_context *ctx, pdf_processor *proc)
 		pop_tag(ctx, p, &p->pending_tags);
 	while (p->current_tags)
 		pop_tag(ctx, p, &p->current_tags);
+
+	fz_drop_text(ctx, p->tos.text);
+	fz_drop_text(ctx, p->tos.clip_text);
 
 	fz_drop_path(ctx, p->path);
 	pdf_drop_obj(ctx, p->structarray);

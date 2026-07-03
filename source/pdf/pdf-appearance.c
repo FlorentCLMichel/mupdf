@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -21,6 +21,7 @@
 // CA 94129, USA, for further information.
 
 #include "mupdf/fitz.h"
+#include "../fitz/context-imp.h"
 #include "pdf-annot-imp.h"
 #include "mupdf/ucdn.h"
 
@@ -2272,9 +2273,8 @@ write_rich_content(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, pdf_obj **
 	// this matches the math in write_variable_text.
 	if (!multiline)
 	{
-		float ty = ((h - b * 2) - size) / 2;
-		content_box.y0 = h - b - 0.8f * size + ty;
-		content_box.y1 = content_box.y0 + size * 2;
+		float gap = (h - b*2 - size) / 2;
+		content_box = fz_make_rect(b, b + gap, w - b * 2, h + gap + size * 2);
 	}
 
 	fz_try(ctx)
@@ -2356,7 +2356,7 @@ escape_text(fz_context *ctx, const char *s)
 	return d2;
 }
 
-int text_needs_rich_layout(fz_context *ctx, const char *s)
+static int text_needs_rich_layout(fz_context *ctx, const char *s)
 {
 	int c, script;
 	while (*s)
@@ -2539,6 +2539,10 @@ pdf_write_free_text_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 	pdf_annot_default_appearance(ctx, annot, &font, &size, &n, color);
 	lang = pdf_annot_language(ctx, annot);
 	rd = pdf_annot_rect_diff(ctx, annot);
+
+	/* FreeText is always multi-line so default size to 12pts if it is zero. */
+	if (size <= 0)
+		size = 12;
 
 	/* /Rotate is an undocumented annotation property supported by Adobe.
 	 * When Rotate is used, neither the box, nor the arrow move at all.
@@ -2727,6 +2731,9 @@ pdf_write_tx_widget_appearance(fz_context *ctx, pdf_annot *annot, fz_buffer *buf
 		rc = free_rc = escape_text(ctx, text);
 		if (!ds)
 		{
+			// TODO: measure accurate width to fit box if single-line!
+			if (size <= 0)
+				size = (ff & PDF_TX_FIELD_IS_MULTILINE) ? 12 : h - b*2;
 			fz_snprintf(ds_buf, sizeof ds_buf,
 				"font-family:%s;font-size:%gpt;color:#%06x;text-align:%s",
 				full_font_name(&font),
@@ -3653,14 +3660,17 @@ static void pdf_update_appearance(fz_context *ctx, pdf_annot *annot)
 	pdf_obj *subtype;
 	pdf_obj *ft = NULL;
 	pdf_obj *ap_n;
-	int pop_local_xref = 1;
+	int pop_local_xref;
+	int repaired = 0;
+	int xref_base;
 
 retry_after_repair:
+	pop_local_xref = 1;
 	/* Must have any local xref in place in order to check if it's dirty. */
 	pdf_annot_push_local_xref(ctx, annot);
 
 	pdf_begin_implicit_operation(ctx, annot->page->doc);
-	fz_start_throw_on_repair(ctx);
+	pdf_start_throw_on_repair(ctx, annot->page->doc, &xref_base);
 
 	fz_var(pop_local_xref);
 
@@ -3837,7 +3847,7 @@ retry_after_repair:
 	{
 		if (pop_local_xref)
 			pdf_annot_pop_local_xref(ctx, annot);
-		fz_end_throw_on_repair(ctx);
+		pdf_end_throw_on_repair(ctx, annot->page->doc, xref_base);
 	}
 	fz_catch(ctx)
 	{
@@ -3851,10 +3861,14 @@ retry_after_repair:
 		if (fz_caught(ctx) == FZ_ERROR_REPAIRED)
 		{
 			fz_report_error(ctx);
+			repaired = 1;
 			goto retry_after_repair;
 		}
 		fz_rethrow(ctx);
 	}
+
+	if (repaired)
+		pdf_maybe_throw_after_repair(ctx, annot->page->doc);
 }
 
 static void *

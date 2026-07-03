@@ -1,5 +1,7 @@
 # Structured Text Options
 
+The options are specified using an <a href="option-strings.html">option string</a> of key-value pairs.
+
 preserve-images
 : Keep images in output
 
@@ -53,6 +55,12 @@ structured
 
 vectors
 : Include vector bboxes in output
+
+lazy-vectors
+: Delay vectors in the extraction slightly if they would otherwise split an extracted text line
+
+fuzzy-vectors
+: Merge abutting horizontal and vertical vectors
 
 segment
 : Attempt to segment the page

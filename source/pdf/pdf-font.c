@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -188,7 +188,8 @@ static int ft_kind(fz_context *ctx, FT_Face face)
 	return UNKNOWN;
 }
 
-static int ft_cid_to_gid(pdf_font_desc *fontdesc, int cid)
+/* We abuse the ctx param here; NULL means we are locked already! */
+static int ft_cid_to_gid(fz_context *ctx, pdf_font_desc *fontdesc, int cid)
 {
 	if (fontdesc->to_ttf_cmap)
 	{
@@ -250,7 +251,12 @@ static int ft_cid_to_gid(pdf_font_desc *fontdesc, int cid)
 			}
 		}
 
-		return ft_char_index(fontdesc->font->ft_face, cid);
+		if (ctx)
+			fz_ft_lock(ctx);
+		cid = ft_char_index(fontdesc->font->ft_face, cid);
+		if (ctx)
+			fz_ft_unlock(ctx);
+		return cid;
 	}
 
 	if (fontdesc->cid_to_gid && (size_t)cid < fontdesc->cid_to_gid_len && cid >= 0)
@@ -263,20 +269,14 @@ int
 pdf_font_cid_to_gid(fz_context *ctx, pdf_font_desc *fontdesc, int cid)
 {
 	if (fontdesc->font->ft_face)
-	{
-		int gid;
-		fz_ft_lock(ctx);
-		gid = ft_cid_to_gid(fontdesc, cid);
-		fz_ft_unlock(ctx);
-		return gid;
-	}
+		return ft_cid_to_gid(ctx, fontdesc, cid);
 	return cid;
 }
 
 static int ft_width(fz_context *ctx, pdf_font_desc *fontdesc, int cid)
 {
 	int mask = FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING | FT_LOAD_NO_BITMAP | FT_LOAD_IGNORE_TRANSFORM;
-	int gid = ft_cid_to_gid(fontdesc, cid);
+	int gid = ft_cid_to_gid(NULL, fontdesc, cid);
 	FT_Fixed adv = 0;
 	int fterr;
 	FT_Face face = fontdesc->font->ft_face;
@@ -537,8 +537,8 @@ pdf_load_system_font(fz_context *ctx, pdf_font_desc *fontdesc, const char *fontn
 	}
 }
 
-#define TTF_U16(p) ((uint16_t) ((p)[0]<<8) | ((p)[1]))
-#define TTF_U32(p) ((uint32_t) ((p)[0]<<24) | ((p)[1]<<16) | ((p)[2]<<8) | ((p)[3]))
+#define TTF_U16(p) fz_unpack_uint16(p)
+#define TTF_U32(p) fz_unpack_uint32(p)
 
 static fz_buffer *
 pdf_extract_cff_subtable(fz_context *ctx, unsigned char *data, size_t size)
@@ -610,13 +610,16 @@ pdf_load_embedded_font(fz_context *ctx, pdf_document *doc, pdf_font_desc *fontde
 pdf_font_desc *
 pdf_keep_font(fz_context *ctx, pdf_font_desc *fontdesc)
 {
-	return fz_keep_storable(ctx, &fontdesc->storable);
+	if (fontdesc)
+		return fz_keep_storable(ctx, &fontdesc->storable);
+	return NULL;
 }
 
 void
 pdf_drop_font(fz_context *ctx, pdf_font_desc *fontdesc)
 {
-	fz_drop_storable(ctx, &fontdesc->storable);
+	if (fontdesc)
+		fz_drop_storable(ctx, &fontdesc->storable);
 }
 
 static int
@@ -1169,9 +1172,8 @@ load_cid_font(fz_context *ctx, pdf_document *doc, pdf_obj *dict, pdf_obj *encodi
 {
 	pdf_obj *widths;
 	pdf_obj *descriptor;
-	pdf_font_desc *fontdesc = NULL;
+	pdf_font_desc *fontdesc;
 	fz_buffer *buf = NULL;
-	pdf_cmap *cmap;
 	FT_Face face;
 	char collection[256];
 	const char *basefont;
@@ -1180,8 +1182,9 @@ load_cid_font(fz_context *ctx, pdf_document *doc, pdf_obj *dict, pdf_obj *encodi
 	pdf_obj *obj;
 	int dw;
 
-	fz_var(fontdesc);
 	fz_var(buf);
+
+	fontdesc = pdf_new_font_desc(ctx);
 
 	fz_try(ctx)
 	{
@@ -1211,11 +1214,11 @@ load_cid_font(fz_context *ctx, pdf_document *doc, pdf_obj *dict, pdf_obj *encodi
 
 		if (pdf_is_name(ctx, encoding))
 		{
-			cmap = pdf_load_system_cmap(ctx, pdf_to_name(ctx, encoding));
+			fontdesc->encoding = pdf_load_system_cmap(ctx, pdf_to_name(ctx, encoding));
 		}
 		else if (pdf_is_indirect(ctx, encoding))
 		{
-			cmap = pdf_load_embedded_cmap(ctx, doc, encoding);
+			fontdesc->encoding = pdf_load_embedded_cmap(ctx, doc, encoding);
 		}
 		else
 		{
@@ -1224,9 +1227,6 @@ load_cid_font(fz_context *ctx, pdf_document *doc, pdf_obj *dict, pdf_obj *encodi
 
 		/* Load font file */
 
-		fontdesc = pdf_new_font_desc(ctx);
-
-		fontdesc->encoding = cmap;
 		fontdesc->size += pdf_cmap_size(ctx, fontdesc->encoding);
 
 		pdf_set_font_wmode(ctx, fontdesc, pdf_cmap_wmode(ctx, fontdesc->encoding));
@@ -1524,7 +1524,7 @@ pdf_load_font_descriptor(fz_context *ctx, pdf_document *doc, pdf_font_desc *font
 		fontdesc->descent < FZ_MAX_TRUSTWORTHY_DESCENT * 1000)
 	{
 		if (fontdesc->ascent != 0 || fontdesc->descent != 0)
-			fz_warn(ctx, "bogus font ascent/descent values (%g / %g)", fontdesc->ascent, fontdesc->descent);
+			fz_warn(ctx, "bogus font (%s) ascent/descent values (%g / %g)", fontname, fontdesc->ascent, fontdesc->descent);
 		fontdesc->font->ascender = 0.8f;
 		fontdesc->font->descender = -0.2f;
 		fontdesc->font->ascdesc_src = FZ_ASCDESC_DEFAULT;
@@ -1590,7 +1590,7 @@ pdf_load_font(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rdb, pdf_o
 
 	if ((fontdesc = pdf_find_item(ctx, pdf_drop_font_imp, dict)) != NULL)
 	{
-		if (fontdesc->t3loading)
+		if (fontdesc->font->t3loading)
 		{
 			pdf_drop_font(ctx, fontdesc);
 			fz_throw(ctx, FZ_ERROR_SYNTAX, "recursive type3 font");
@@ -1645,11 +1645,11 @@ pdf_load_font(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rdb, pdf_o
 		/* Load CharProcs */
 		if (type3)
 		{
-			fontdesc->t3loading = 1;
+			fontdesc->font->t3loading = 1;
 			fz_try(ctx)
 				pdf_load_type3_glyphs(ctx, doc, fontdesc);
 			fz_always(ctx)
-				fontdesc->t3loading = 0;
+				fontdesc->font->t3loading = 0;
 			fz_catch(ctx)
 			{
 				pdf_remove_item(ctx, fontdesc->storable.drop, dict);

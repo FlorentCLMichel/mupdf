@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -84,13 +84,13 @@ static void svg_pop_use(fz_context *ctx, svg_document *doc)
 		doc->cycle = doc->cycle->up;
 }
 
-void svg_begin_state(fz_context *ctx, svg_state *child, const svg_state *parent)
+static void svg_begin_state(fz_context *ctx, svg_state *child, const svg_state *parent)
 {
 	memcpy(child, parent, sizeof(svg_state));
 	child->stroke = fz_clone_stroke_state(ctx, parent->stroke);
 }
 
-void svg_end_state(fz_context *ctx, svg_state *child)
+static void svg_end_state(fz_context *ctx, svg_state *child)
 {
 	fz_drop_stroke_state(ctx, child->stroke);
 }
@@ -401,6 +401,9 @@ svg_parse_polygon_imp(fz_context *ctx, svg_document *doc, fz_xml *node, int docl
 				nargs = 0;
 			}
 		}
+
+		if (doclose)
+			fz_closepath(ctx, path);
 	}
 	fz_catch(ctx)
 	{
@@ -1297,11 +1300,13 @@ svg_run_g(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *root, cons
 {
 	svg_state local_state;
 	fz_xml *node;
+	char font_family[100];
 
 	svg_begin_state(ctx, &local_state, inherit_state);
 	fz_try(ctx)
 	{
 		svg_parse_common(ctx, doc, root, &local_state);
+		svg_parse_font_attributes(ctx, doc, root, &local_state, font_family, sizeof font_family);
 
 		for (node = fz_xml_down(root); node; node = fz_xml_next(node))
 			svg_run_element(ctx, dev, doc, node, &local_state);
