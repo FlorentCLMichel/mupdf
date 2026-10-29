@@ -384,6 +384,16 @@ fz_append_string(fz_context *ctx, fz_buffer *buf, const char *data)
 }
 
 void
+fz_append_byte_n(fz_context *ctx, fz_buffer *buf, int c, size_t n)
+{
+	if (buf->len + n > buf->cap)
+		fz_ensure_buffer(ctx, buf, buf->len + n);
+	memset(buf->data + buf->len, c, n);
+	buf->len += n;
+	buf->unused_bits = 0;
+}
+
+void
 fz_append_byte(fz_context *ctx, fz_buffer *buf, int val)
 {
 	if (buf->len + 1 > buf->cap)
@@ -672,9 +682,9 @@ fz_test_buffer_write(fz_context *ctx)
 
 		if (memcmp(copy->data, master->data, TEST_LEN) != 0)
 			fprintf(stderr, "Copied buffer is different!\n");
-		fz_seek(stm, 0, 0);
+		fz_seek(ctx, stm, 0, 0);
 	}
-	fz_drop_stream(stm);
+	fz_drop_stream(ctx, stm);
 	fz_drop_buffer(ctx, master);
 	fz_drop_buffer(ctx, copy);
 }

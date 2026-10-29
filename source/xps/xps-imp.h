@@ -23,8 +23,8 @@
 #ifndef SOURCE_XPS_IMP_H
 #define SOURCE_XPS_IMP_H
 
-typedef struct xps_document_s xps_document;
-typedef struct xps_page_s xps_page;
+typedef struct xps_document xps_document;
+typedef struct xps_page xps_page;
 
 fz_document *xps_open_document(fz_context *ctx, const char *filename);
 fz_document *xps_open_document_with_stream(fz_context *ctx, fz_stream *file);
@@ -40,9 +40,9 @@ int xps_strcasecmp(char *a, char *b);
 void xps_resolve_url(fz_context *ctx, xps_document *doc, char *output, char *base_uri, char *path, int output_size);
 char *xps_parse_point(fz_context *ctx, xps_document *doc, char *s_in, float *x, float *y);
 
-typedef struct xps_part_s xps_part;
+typedef struct xps_part xps_part;
 
-struct xps_part_s
+struct xps_part
 {
 	char *name;
 	fz_buffer *data;
@@ -59,18 +59,18 @@ void xps_drop_part(fz_context *ctx, xps_document *doc, xps_part *part);
 fz_buffer *xps_read_pieces(fz_context *ctx, fz_archive *zip, const char *name);
 
 
-typedef struct xps_fixdoc_s xps_fixdoc;
-typedef struct xps_fixpage_s xps_fixpage;
-typedef struct xps_target_s xps_target;
+typedef struct xps_fixdoc xps_fixdoc;
+typedef struct xps_fixpage xps_fixpage;
+typedef struct xps_target xps_target;
 
-struct xps_fixdoc_s
+struct xps_fixdoc
 {
 	char *name;
 	char *outline;
 	xps_fixdoc *next;
 };
 
-struct xps_fixpage_s
+struct xps_fixpage
 {
 	char *name;
 	int number;
@@ -79,14 +79,14 @@ struct xps_fixpage_s
 	xps_fixpage *next;
 };
 
-struct xps_page_s
+struct xps_page
 {
 	fz_page super;
 	xps_fixpage *fix;
 	fz_xml_doc *xml;
 };
 
-struct xps_target_s
+struct xps_target
 {
 	char *name;
 	int page;
@@ -97,18 +97,18 @@ void xps_read_page_list(fz_context *ctx, xps_document *doc);
 void xps_print_page_list(fz_context *ctx, xps_document *doc);
 void xps_drop_page_list(fz_context *ctx, xps_document *doc);
 
-typedef struct xps_font_cache_s xps_font_cache;
+typedef struct xps_font_cache xps_font_cache;
 
-struct xps_font_cache_s
+struct xps_font_cache
 {
 	char *name;
 	fz_font *font;
 	xps_font_cache *next;
 };
 
-typedef struct xps_glyph_metrics_s xps_glyph_metrics;
+typedef struct xps_glyph_metrics xps_glyph_metrics;
 
-struct xps_glyph_metrics_s
+struct xps_glyph_metrics
 {
 	float hadv, vadv, vorg;
 };
@@ -125,9 +125,9 @@ void xps_print_path(fz_context *ctx, xps_document *doc);
 void xps_parse_color(fz_context *ctx, xps_document *doc, char *base_uri, char *hexstring, fz_colorspace **csp, float *samples);
 void xps_set_color(fz_context *ctx, xps_document *doc, fz_colorspace *colorspace, float *samples);
 
-typedef struct xps_resource_s xps_resource;
+typedef struct xps_resource xps_resource;
 
-struct xps_resource_s
+struct xps_resource
 {
 	char *name;
 	char *base_uri; /* only used in the head nodes */
@@ -181,11 +181,11 @@ void xps_clip(fz_context *ctx, xps_document *doc, fz_matrix ctm, xps_resource *d
 
 fz_xml *xps_lookup_alternate_content(fz_context *ctx, xps_document *doc, fz_xml *node);
 
-typedef struct xps_entry_s xps_entry;
+typedef struct xps_entry xps_entry;
 
 /* Implementation details: Subject to change. */
 
-struct xps_entry_s
+struct xps_entry
 {
 	char *name;
 	int64_t offset;
@@ -193,7 +193,7 @@ struct xps_entry_s
 	int usize;
 };
 
-struct xps_document_s
+struct xps_document
 {
 	fz_document super;
 	fz_archive *zip;

@@ -21,7 +21,6 @@
 // CA 94129, USA, for further information.
 
 #include "mupdf/fitz.h"
-#include "../fitz/context-imp.h"
 #include "pdf-annot-imp.h"
 #include "mupdf/ucdn.h"
 
@@ -34,7 +33,7 @@
 
 #include "annotation-icons.h"
 
-/* #define PDF_DEBUG_APPEARANCE_SYNTHESIS */
+//#define PDF_DEBUG_APPEARANCE_SYNTHESIS
 
 #define REPLACEMENT 0xB7
 #define CIRCLE_MAGIC 0.551915f
@@ -1620,6 +1619,14 @@ add_required_fonts(fz_context *ctx, pdf_document *doc, pdf_obj *res_font,
 		case UCDN_SCRIPT_BOPOMOFO: add_bopomofo = 1; break;
 		case UCDN_SCRIPT_HAN: add_han = 1; break;
 		}
+
+		// halfwidth and fullwidth forms
+		if (c >= 0xff01 && c <= 0xffee)
+			add_han = 1;
+
+		// cjk symbols and punctuation
+		if (c >= 0x3000 && c <= 0x303f)
+			add_han = 1;
 	}
 
 	if (add_han)
@@ -1746,6 +1753,15 @@ static int next_text_walk(fz_context *ctx, struct text_walk_state *state)
 
 	state->n = fz_chartorune(&state->u, state->text);
 	script = ucdn_get_script(state->u);
+
+	// halfwidth and fullwidth forms
+	if (state->u >= 0xff01 && state->u <= 0xffee)
+		script = UCDN_SCRIPT_HAN;
+
+	// cjk symbols and punctuation
+	if (state->u >= 0x3000 && state->u <= 0x303f)
+		script = UCDN_SCRIPT_HAN;
+
 	if (script == UCDN_SCRIPT_COMMON || script == UCDN_SCRIPT_INHERITED)
 		script = state->last_script;
 	state->last_script = script;
@@ -1938,6 +1954,8 @@ write_string_with_quadding(fz_context *ctx, fz_buffer *buf,
 				write_string(ctx, buf, lang, font, fontname, size, a, b-1);
 			else
 				write_string(ctx, buf, lang, font, fontname, size, a, b);
+			if (b[-1] == '\r' && b[0] == '\n')
+				++b;
 			a = b;
 			px = x;
 		}
@@ -2075,6 +2093,8 @@ layout_string_with_quadding(fz_context *ctx, fz_layout_block *out,
 				layout_string(ctx, out, lang, font, size, xorig+x, y, a, b);
 				add_line_at_end = 0;
 			}
+			if (b[-1] == '\r' && b[0] == '\n')
+				++b;
 			a = b;
 			y -= lineheight;
 		}
@@ -2120,7 +2140,8 @@ write_variable_text(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, pdf_obj *
 				size = 12;
 			else
 			{
-				size = w / measure_string(ctx, lang, font, text);
+				float ms = measure_string(ctx, lang, font, text);
+				size = ms ? w / ms : 12;
 				if (size > h)
 					size = h;
 			}
@@ -2191,7 +2212,8 @@ layout_variable_text(fz_context *ctx, fz_layout_block *out,
 				size = 12;
 			else
 			{
-				size = w / measure_string(ctx, lang, font, text);
+				float ms = measure_string(ctx, lang, font, text);
+				size = ms ? w / ms : 12;
 				if (size > h)
 					size = h;
 			}
@@ -2382,6 +2404,14 @@ static int text_needs_rich_layout(fz_context *ctx, const char *s)
 		)
 			continue;
 
+		// halfwidth and fullwidth forms
+		if (c >= 0xff01 && c <= 0xffee)
+			continue;
+
+		// cjk symbols and punctuation
+		if (c >= 0x3000 && c <= 0x303f)
+			continue;
+
 		return 1;
 	}
 	return 0;
@@ -2463,7 +2493,7 @@ pdf_write_line_caption(fz_context *ctx, pdf_annot *annot, fz_buffer *buf, fz_rec
 		if (tw + size > line_length)
 			top = 1;
 
-		tm = fz_rotate(atan2(dy, dx) * 180 / M_PI);
+		tm = fz_rotate(atan2(dy, dx) * 180 / FZ_PI);
 		tm.e = (a.x + b.x) / 2 - dx * (tw / 2);
 		tm.f = (a.y + b.y) / 2 - dy * (tw / 2);
 
@@ -3356,7 +3386,7 @@ static void draw_logo(fz_context *ctx, fz_path *path)
 	fz_lineto(ctx, path, 95.25f, 117.749f);
 	fz_curveto(ctx, path, 105.75f, 108.749f, 114.0f, 105.749f, 125.25f, 105.749f);
 	fz_closepath(ctx, path);
-};
+}
 
 static float logo_color[3] = { (float)0xa4 / (float)0xFF, (float)0xca / (float)0xFF, (float)0xf5 / (float)0xFF };
 

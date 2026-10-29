@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2024 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -240,7 +240,8 @@ fz_pixmap *pdf_new_pixmap_from_page_with_usage(fz_context *ctx, pdf_page *page, 
 fz_pixmap *pdf_new_pixmap_from_page_contents_with_separations_and_usage(fz_context *ctx, pdf_page *page, fz_matrix ctm, fz_colorspace *cs, fz_separations *seps, int alpha, const char *usage, fz_box_type box);
 fz_pixmap *pdf_new_pixmap_from_page_with_separations_and_usage(fz_context *ctx, pdf_page *page, fz_matrix ctm, fz_colorspace *cs, fz_separations *seps, int alpha, const char *usage, fz_box_type box);
 
-enum {
+enum pdf_redact_image_flags
+{
 	/* Do not change images at all */
 	PDF_REDACT_IMAGE_NONE,
 
@@ -265,13 +266,15 @@ enum {
 	PDF_REDACT_IMAGE_REMOVE_UNLESS_INVISIBLE
 };
 
-enum {
+enum pdf_redact_line_art_flags
+{
 	PDF_REDACT_LINE_ART_NONE,
 	PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
 	PDF_REDACT_LINE_ART_REMOVE_IF_TOUCHED
 };
 
-enum {
+enum pdf_redact_text_flags
+{
 	/* Remove any text that overlaps with the redaction region,
 	 * however slightly. This is the default option, and is the
 	 * correct option for secure behaviour. */
@@ -289,7 +292,7 @@ enum {
 	PDF_REDACT_TEXT_REMOVE_INVISIBLE,
 };
 
-typedef struct
+typedef struct pdf_redact_options
 {
 	int black_boxes;
 	int image_method;
@@ -303,7 +306,7 @@ fz_transition *pdf_page_presentation(fz_context *ctx, pdf_page *page, fz_transit
 
 fz_default_colorspaces *pdf_load_default_colorspaces(fz_context *ctx, pdf_document *doc, pdf_page *page);
 
-void pdf_clip_page(fz_context *ctx, pdf_page *page, fz_rect *clip);
+void pdf_clip_page(fz_context *ctx, pdf_page *page, fz_rect clip);
 
 void pdf_vectorize_page(fz_context *ctx, pdf_page *page);
 

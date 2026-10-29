@@ -38,13 +38,10 @@ typedef struct pdf_annot pdf_annot;
 typedef struct pdf_js pdf_js;
 typedef struct pdf_document pdf_document;
 
-enum
-{
-	PDF_LEXBUF_SMALL = 256,
-	PDF_LEXBUF_LARGE = 65536
-};
+#define PDF_LEXBUF_SMALL 256
+#define PDF_LEXBUF_LARGE 65536
 
-typedef struct
+typedef struct pdf_lexbuf
 {
 	size_t size;
 	size_t base_size;
@@ -55,7 +52,7 @@ typedef struct
 	char buffer[PDF_LEXBUF_SMALL];
 } pdf_lexbuf;
 
-typedef struct
+typedef struct pdf_lexbuf_large
 {
 	pdf_lexbuf base;
 	char buffer[PDF_LEXBUF_LARGE - PDF_LEXBUF_SMALL];
@@ -169,6 +166,20 @@ void pdf_js_set_console(fz_context *ctx, pdf_document *doc, pdf_js_console *cons
 pdf_document *pdf_open_document(fz_context *ctx, const char *filename);
 
 /*
+	Open a PDF document with an archive. If the archive is non-NULL,
+	the filename will be searched for inside the archive, as will
+	any external files. Otherwise the document will be loaded from
+	the standard filing system, and no external file access will
+	be allowed.
+
+	Same as pdf_open_document, but with the addition of an
+	archive.
+
+	A reference is taken to the archive.
+*/
+pdf_document *pdf_open_document_with_dir(fz_context *ctx, const char *filename, fz_archive *dir);
+
+/*
 	Opens a PDF document.
 
 	Same as pdf_open_document, but takes a stream instead of a
@@ -178,6 +189,15 @@ pdf_document *pdf_open_document(fz_context *ctx, const char *filename);
 	fz_drop_stream for closing an open stream.
 */
 pdf_document *pdf_open_document_with_stream(fz_context *ctx, fz_stream *file);
+
+/*
+	Like pdf_open_document_with_stream, but in addition an
+	archive is passed in which external resources may be looked
+	for.
+
+	A reference will be taken to the archive.
+*/
+pdf_document *pdf_open_document_with_stream_and_dir(fz_context *ctx, fz_stream *file, fz_archive *dir);
 
 /*
 	Closes and frees an opened PDF document.
@@ -280,7 +300,7 @@ const char *pdf_layer_name(fz_context *ctx, pdf_document *doc, int layer);
 int pdf_layer_is_enabled(fz_context *ctx, pdf_document *doc, int layer);
 void pdf_enable_layer(fz_context *ctx, pdf_document *doc, int layer, int enabled);
 
-typedef struct
+typedef struct pdf_layer_config
 {
 	const char *name;
 	const char *creator;
@@ -377,7 +397,7 @@ void pdf_deselect_layer_config_ui(fz_context *ctx, pdf_document *doc, int ui);
 */
 void pdf_toggle_layer_config_ui(fz_context *ctx, pdf_document *doc, int ui);
 
-typedef enum
+typedef enum pdf_layer_config_ui_type
 {
 	PDF_LAYER_UI_LABEL = 0,
 	PDF_LAYER_UI_CHECKBOX = 1,
@@ -387,7 +407,7 @@ typedef enum
 const char *pdf_layer_config_ui_type_to_string(pdf_layer_config_ui_type type);
 pdf_layer_config_ui_type pdf_layer_config_ui_type_from_string(const char *str);
 
-typedef struct
+typedef struct pdf_layer_config_ui
 {
 	const char *text;
 	int depth;
@@ -440,20 +460,20 @@ typedef struct pdf_unsaved_sig
 	struct pdf_unsaved_sig *next;
 } pdf_unsaved_sig;
 
-typedef struct
+typedef struct pdf_rev_page_map
 {
 	int page;
 	int object;
 } pdf_rev_page_map;
 
-typedef struct
+typedef struct pdf_hint_page
 {
 	int number; /* Page object number */
 	int64_t offset; /* Offset of page object */
 	int64_t index; /* Index into shared hint_shared_ref */
 } pdf_hint_page;
 
-typedef struct
+typedef struct pdf_hint_shared
 {
 	int number; /* Object number of first object */
 	int64_t offset; /* Offset of first object */
@@ -553,9 +573,7 @@ struct pdf_document
 	pdf_free_doc_event_data_cb *free_event_data_cb;
 	void *event_cb_data;
 
-	int num_type3_fonts;
-	int max_type3_fonts;
-	fz_font **type3_fonts;
+	fz_list(fz_font *, type3_fonts);
 
 	struct {
 		fz_hash_table *fonts;
@@ -572,6 +590,8 @@ struct pdf_document
 	pdf_journal *journal;
 
 	int throw_on_repair;
+
+	fz_archive *archive;
 };
 
 pdf_document *pdf_create_document(fz_context *ctx);
@@ -744,7 +764,8 @@ void pdf_delete_page_range(fz_context *ctx, pdf_document *doc, int start, int en
 void pdf_page_label(fz_context *ctx, pdf_document *doc, int page, char *buf, size_t size);
 void pdf_page_label_imp(fz_context *ctx, fz_document *doc, int chapter, int page, char *buf, size_t size);
 
-typedef enum {
+typedef enum pdf_page_label_style
+{
 	PDF_PAGE_LABEL_NONE = 0,
 	PDF_PAGE_LABEL_DECIMAL = 'D',
 	PDF_PAGE_LABEL_ROMAN_UC = 'R',
@@ -764,7 +785,7 @@ void pdf_set_document_language(fz_context *ctx, pdf_document *doc, fz_text_langu
 	to control aspects of the writing process. This structure may grow
 	in the future, and should be zero-filled to allow forwards compatibility.
 */
-typedef struct
+typedef struct pdf_write_options
 {
 	int do_incremental; /* Write just the changed objects. */
 	int do_pretty; /* Pretty-print dictionaries and arrays. */
@@ -788,6 +809,7 @@ typedef struct
 	int do_use_objstms; /* Use objstms if possible */
 	int compression_effort; /* 0 for default. 100 = max, 1 = min. */
 	int do_labels; /* Add labels to each object showing how it can be reached from the Root. */
+	int reproducible; /* Attempt to make operations 'reproducible'. For example, avoid writing MuPDF version number. */
 } pdf_write_options;
 
 FZ_DATA extern const pdf_write_options pdf_default_write_options;
@@ -951,7 +973,7 @@ void pdf_drop_object_labels(fz_context *ctx, pdf_object_labels *g);
 typedef void (pdf_label_object_fn)(fz_context *ctx, void *arg, const char *label);
 void pdf_label_object(fz_context *ctx, pdf_object_labels *g, int num, pdf_label_object_fn *callback, void *arg);
 
-typedef enum
+typedef enum pdf_check_structure_result
 {
 	PDF_STRUCT_NOT_PRESENT = 0,
 
@@ -1002,41 +1024,41 @@ pdf_check_structure_result pdf_check_structure_tree(fz_context *ctx, pdf_documen
 
 	The pattern of code is therefore as follows:
 
-	void pdf_do_some_operation(fz_context *ctx, pdf_document *doc, ...)
-	{
-		int xref_base; // Variable to store the initial xref_base value
-		int repaired = 0;
-
-	retry_on_repair:
-		pdf_start_throw_on_repair(ctx, doc, &xref_base);
-
-		fz_try(ctx)
+		void pdf_do_some_operation(fz_context *ctx, pdf_document *doc, ...)
 		{
-			// Actual operation goes here. This may involved changing
-			// doc->xref_base. e.g. doc->xref_base = initial
-		}
-		fz_always(ctx)
-			pdf_end_throw_on_repair(ctx, doc, xref_base);
-		fz_catch(ctx)
-		{
-			if (fz_caught(ctx) == FZ_ERROR_REPAIRED)
+			int xref_base; // Variable to store the initial xref_base value
+			int repaired = 0;
+
+		retry_on_repair:
+			pdf_start_throw_on_repair(ctx, doc, &xref_base);
+
+			fz_try(ctx)
 			{
-				fz_report_error(ctx);
-				repaired = 1;
-				// doc->xref_base will always have been reset to be something legal
-				// here, but if you have been passed in an xref level to operate at
-				// you may want to check that that level is still valid here!
-				// e.g. if (initial >= doc->num_xref_sections) return;
-				goto retry_on_repair;
+				// Actual operation goes here. This may involved changing
+				// doc->xref_base. e.g. doc->xref_base = initial
 			}
-			fz_rethrow(ctx);
-		}
+			fz_always(ctx)
+				pdf_end_throw_on_repair(ctx, doc, xref_base);
+			fz_catch(ctx)
+			{
+				if (fz_caught(ctx) == FZ_ERROR_REPAIRED)
+				{
+					fz_report_error(ctx);
+					repaired = 1;
+					// doc->xref_base will always have been reset to be something legal
+					// here, but if you have been passed in an xref level to operate at
+					// you may want to check that that level is still valid here!
+					// e.g. if (initial >= doc->num_xref_sections) return;
+					goto retry_on_repair;
+				}
+				fz_rethrow(ctx);
+			}
 
-		// If we repaired, then we swallowed the exception. There may have been callers above
-		// us that were wanting to be informed. This call takes care of that if required.
-		if (repaired)
-			pdf_maybe_throw_after_repair(ctx, doc);
-	}
+			// If we repaired, then we swallowed the exception. There may have been callers above
+			// us that were wanting to be informed. This call takes care of that if required.
+			if (repaired)
+				pdf_maybe_throw_after_repair(ctx, doc);
+		}
 */
 
 /*

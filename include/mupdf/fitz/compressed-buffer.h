@@ -33,7 +33,7 @@
 	Compression parameters used for buffers of compressed data;
 	typically for the source data for images.
 */
-typedef struct
+typedef struct fz_compression_params
 {
 	int type;
 	union {
@@ -89,7 +89,7 @@ typedef struct
 	Buffers of compressed data; typically for the source data
 	for images.
 */
-typedef struct
+typedef struct fz_compressed_buffer
 {
 	int refs;
 	fz_compression_params params;
@@ -151,7 +151,7 @@ const char *fz_image_type_name(int type);
 */
 int fz_lookup_image_type(const char *type);
 
-enum
+typedef enum fz_image_type
 {
 	FZ_IMAGE_UNKNOWN = 0,
 
@@ -176,7 +176,7 @@ enum
 	FZ_IMAGE_PNM,
 	FZ_IMAGE_TIFF,
 	FZ_IMAGE_PSD,
-};
+} fz_image_type;
 
 /**
 	Drop a reference to a compressed buffer. Destroys the buffer

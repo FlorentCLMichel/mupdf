@@ -1073,6 +1073,7 @@
     <ClCompile Include="..\..\source\fitz\bitmap.c" />
     <ClCompile Include="..\..\source\fitz\brotli.c" />
     <ClCompile Include="..\..\source\fitz\buffer.c" />
+    <ClCompile Include="..\..\source\fitz\crc32.c" />
     <ClCompile Include="..\..\source\fitz\color-fast.c" />
     <ClCompile Include="..\..\source\fitz\color-icc-create.c" />
     <ClCompile Include="..\..\source\fitz\color-lcms.c" />
@@ -1082,6 +1083,7 @@
     <ClCompile Include="..\..\source\fitz\context.c" />
     <ClCompile Include="..\..\source\fitz\crypt-aes.c" />
     <ClCompile Include="..\..\source\fitz\crypt-arc4.c" />
+    <ClCompile Include="..\..\source\fitz\crypt-chacha20.c" />
     <ClCompile Include="..\..\source\fitz\crypt-md5.c" />
     <ClCompile Include="..\..\source\fitz\crypt-sha2.c" />
     <ClCompile Include="..\..\source\fitz\cull-device.c" />
@@ -1135,6 +1137,7 @@
     <ClCompile Include="..\..\source\fitz\json.c" />
     <ClCompile Include="..\..\source\fitz\link.c" />
     <ClCompile Include="..\..\source\fitz\list-device.c" />
+    <ClCompile Include="..\..\source\fitz\list.c" />
     <ClCompile Include="..\..\source\fitz\load-bmp.c" />
     <ClCompile Include="..\..\source\fitz\load-gif.c" />
     <ClCompile Include="..\..\source\fitz\load-jbig2.c" />
@@ -1211,6 +1214,7 @@
     <ClCompile Include="..\..\source\fitz\util.c" />
     <ClCompile Include="..\..\source\fitz\writer.c" />
     <ClCompile Include="..\..\source\fitz\xml.c" />
+    <ClCompile Include="..\..\source\fitz\xml-dom.c" />
     <ClCompile Include="..\..\source\fitz\zip.c" />
     <ClCompile Include="..\..\source\html\css-apply.c" />
     <ClCompile Include="..\..\source\html\css-parse.c" />
@@ -1225,7 +1229,6 @@
     <ClCompile Include="..\..\source\html\office.c" />
     <ClCompile Include="..\..\source\html\story-writer.c" />
     <ClCompile Include="..\..\source\html\txt.c" />
-    <ClCompile Include="..\..\source\html\xml-dom.c" />
     <ClCompile Include="..\..\source\pdf\pdf-af.c" />
     <ClCompile Include="..\..\source\pdf\pdf-annot.c" />
     <ClCompile Include="..\..\source\pdf\pdf-appearance.c" />
@@ -1327,9 +1330,11 @@
     <ClInclude Include="..\..\include\mupdf\fitz\hash.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\heap-imp.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\heap.h" />
+    <ClInclude Include="..\..\include\mupdf\fitz\html.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\image.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\json.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\link.h" />
+    <ClInclude Include="..\..\include\mupdf\fitz\list.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\log.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\options.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\outline.h" />
@@ -1356,7 +1361,6 @@
     <ClInclude Include="..\..\include\mupdf\fitz\write-pixmap.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\writer.h" />
     <ClInclude Include="..\..\include\mupdf\fitz\xml.h" />
-    <ClInclude Include="..\..\include\mupdf\html.h" />
     <ClInclude Include="..\..\include\mupdf\memento.h" />
     <ClInclude Include="..\..\include\mupdf\pdf.h" />
     <ClInclude Include="..\..\include\mupdf\pdf\annot.h" />
@@ -1387,6 +1391,7 @@
     <ClInclude Include="..\..\source\fitz\deskew_neon.h" />
     <ClInclude Include="..\..\source\fitz\deskew_sse.h" />
     <ClInclude Include="..\..\source\fitz\draw-imp.h" />
+    <ClInclude Include="..\..\source\fitz\fitz-imp.h" />
     <ClInclude Include="..\..\source\fitz\font-table.h" />
     <ClInclude Include="..\..\source\fitz\glyph-imp.h" />
     <ClInclude Include="..\..\source\fitz\glyphbox.h" />

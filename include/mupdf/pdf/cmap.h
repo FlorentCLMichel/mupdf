@@ -31,22 +31,22 @@
 // This results in us needing to support up to 256 characters.
 #define PDF_MRANGE_CAP 256
 
-typedef struct
+typedef struct pdf_range
 {
 	unsigned short low, high, out;
 } pdf_range;
 
-typedef struct
+typedef struct pdf_xrange
 {
 	unsigned int low, high, out;
 } pdf_xrange;
 
-typedef struct
+typedef struct pdf_mrange
 {
 	unsigned int low, out;
 } pdf_mrange;
 
-typedef struct cmap_splay cmap_splay;
+typedef struct pdf_cmap_splay pdf_cmap_splay;
 
 typedef struct pdf_cmap
 {
@@ -75,11 +75,10 @@ typedef struct pdf_cmap
 	int mlen, mcap;
 	pdf_mrange *mranges;
 
-	int dlen, dcap;
-	int *dict;
+	fz_list(int, dict);
 
-	int tlen, tcap, ttop;
-	cmap_splay *tree;
+	int tree_top;
+	fz_list(pdf_cmap_splay, tree);
 } pdf_cmap;
 
 pdf_cmap *pdf_new_cmap(fz_context *ctx);

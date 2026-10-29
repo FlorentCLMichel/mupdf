@@ -29,7 +29,7 @@
 /* default page size */
 #define DEF_WIDTH 612
 #define DEF_HEIGHT 792
-#define DEF_FONTSIZE 12
+#define DEF_FONTSIZE 16
 
 #define MAX_USE_DEPTH 100
 
@@ -46,12 +46,10 @@ typedef struct svg_state
 	float opacity;
 
 	int fill_rule;
-	int fill_is_set;
-	float fill_color[3];
-	float fill_opacity;
+	svg_material fill_mat;
+	svg_material stroke_mat;
 
-	int stroke_is_set;
-	float stroke_color[3];
+	float fill_opacity;
 	float stroke_opacity;
 
 	const char *font_family;
@@ -87,34 +85,97 @@ static void svg_pop_use(fz_context *ctx, svg_document *doc)
 static void svg_begin_state(fz_context *ctx, svg_state *child, const svg_state *parent)
 {
 	memcpy(child, parent, sizeof(svg_state));
+	if (child->fill_mat.type == SVG_MATERIAL_SHADE)
+		fz_keep_shade(ctx, child->fill_mat.u.s.shade);
+	if (child->stroke_mat.type == SVG_MATERIAL_SHADE)
+		fz_keep_shade(ctx, child->stroke_mat.u.s.shade);
 	child->stroke = fz_clone_stroke_state(ctx, parent->stroke);
 }
 
 static void svg_end_state(fz_context *ctx, svg_state *child)
 {
+	if (child->fill_mat.type == SVG_MATERIAL_SHADE)
+		fz_drop_shade(ctx, child->fill_mat.u.s.shade);
+	if (child->stroke_mat.type == SVG_MATERIAL_SHADE)
+		fz_drop_shade(ctx, child->stroke_mat.u.s.shade);
 	fz_drop_stroke_state(ctx, child->stroke);
+}
+
+void
+svg_drop_material(fz_context *ctx, svg_material *mat)
+{
+	if (mat->type == SVG_MATERIAL_SHADE)
+		fz_drop_shade(ctx, mat->u.s.shade);
+
+	mat->type = SVG_MATERIAL_NONE;
+}
+
+static fz_matrix
+obb_transform(fz_context *ctx, fz_path *path, fz_matrix ctm, fz_shade *shade)
+{
+	/* This took me a while to figure out, and it'll probably confuse me again in future if I don't document it.
+	 *
+	 * When we run a shade it makes local_tfm = fz_concat(shade->transform, ctm)
+	 * It then maps the end points of the gradient through local_tfm. So: endpoint . local_ctm = (x, y)
+	 * We want to 'adjust' the ctm, so that the overall effect is as if the endpoint had been defined in userspace
+	 * rather than the unit square.
+	 * So effectively we'd like to do: endpoint . obb_adjust . shade->transform . ctm
+	 * But matrix multiplication is not commutative, so that's hard. But that's equivalent to doing:
+	 *    endpoint . shade->transform . invert(shade->transform). obb_adjust . shade->transform . ctm
+	 * So if we pass in ctm' = invert(shade->transform). obb_adjust . shade->transform . ctm
+	 * rather than ctm we should get the desired effect.
+	 */
+
+	fz_rect bounds = fz_bound_path(ctx, path, NULL, fz_identity);
+	fz_matrix obb_adjust = fz_concat(fz_scale(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0), fz_translate(bounds.x0, bounds.y0));
+	fz_matrix inv = fz_invert_matrix(shade->matrix);
+
+	return fz_concat(fz_concat(inv, obb_adjust), shade->matrix);
 }
 
 static void svg_fill(fz_context *ctx, fz_device *dev, svg_document *doc, fz_path *path, svg_state *state)
 {
 	float opacity = state->opacity * state->fill_opacity;
-	if (path)
-		fz_fill_path(ctx, dev, path, state->fill_rule, state->transform, fz_device_rgb(ctx), state->fill_color, opacity, fz_default_color_params);
+
+	if (!path)
+		return;
+
+	if (state->fill_mat.type == SVG_MATERIAL_COLOR)
+		fz_fill_path(ctx, dev, path, state->fill_rule, state->transform, fz_device_rgb(ctx), state->fill_mat.u.color, opacity, fz_default_color_params);
+	if (state->fill_mat.type == SVG_MATERIAL_SHADE)
+	{
+		fz_matrix tfm = state->transform;
+		fz_clip_path(ctx, dev, path, state->fill_rule, state->transform, fz_infinite_rect);
+		if (state->fill_mat.u.s.use_obb)
+			tfm = obb_transform(ctx, path, state->transform, state->fill_mat.u.s.shade);
+		fz_fill_shade(ctx, dev, state->fill_mat.u.s.shade, tfm, state->fill_opacity, fz_default_color_params);
+		fz_pop_clip(ctx, dev);
+	}
 }
 
 static void svg_stroke(fz_context *ctx, fz_device *dev, svg_document *doc, fz_path *path, svg_state *state)
 {
 	float opacity = state->opacity * state->stroke_opacity;
-	if (path)
-		fz_stroke_path(ctx, dev, path, state->stroke, state->transform, fz_device_rgb(ctx), state->stroke_color, opacity, fz_default_color_params);
+	if (!path)
+		return;
+
+	if (state->stroke_mat.type == SVG_MATERIAL_COLOR)
+		fz_stroke_path(ctx, dev, path, state->stroke, state->transform, fz_device_rgb(ctx), state->stroke_mat.u.color, opacity, fz_default_color_params);
+	if (state->stroke_mat.type == SVG_MATERIAL_SHADE)
+	{
+		fz_matrix tfm = state->transform;
+		fz_clip_stroke_path(ctx, dev, path, state->stroke, state->transform, fz_infinite_rect);
+		if (state->stroke_mat.u.s.use_obb)
+			tfm = obb_transform(ctx, path, state->transform, state->stroke_mat.u.s.shade);
+		fz_fill_shade(ctx, dev, state->stroke_mat.u.s.shade, tfm, state->stroke_opacity, fz_default_color_params);
+		fz_pop_clip(ctx, dev);
+	}
 }
 
 static void svg_draw_path(fz_context *ctx, fz_device *dev, svg_document *doc, fz_path *path, svg_state *state)
 {
-	if (state->fill_is_set)
-		svg_fill(ctx, dev, doc, path, state);
-	if (state->stroke_is_set)
-		svg_stroke(ctx, dev, doc, path, state);
+	svg_fill(ctx, dev, doc, path, state);
+	svg_stroke(ctx, dev, doc, path, state);
 }
 
 /*
@@ -241,7 +302,7 @@ svg_run_circle(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *node,
 
 		if (cx_att) cx = svg_parse_length(cx_att, local_state.viewbox_w, local_state.fontsize);
 		if (cy_att) cy = svg_parse_length(cy_att, local_state.viewbox_h, local_state.fontsize);
-		if (r_att) r = svg_parse_length(r_att, local_state.viewbox_size, 12);
+		if (r_att) r = svg_parse_length(r_att, local_state.viewbox_size, local_state.fontsize);
 
 		if (r > 0)
 		{
@@ -333,13 +394,13 @@ svg_run_line(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *node, c
 		if (x2_att) x2 = svg_parse_length(x2_att, local_state.viewbox_w, local_state.fontsize);
 		if (y2_att) y2 = svg_parse_length(y2_att, local_state.viewbox_h, local_state.fontsize);
 
-		if (local_state.stroke_is_set)
-		{
-			path = fz_new_path(ctx);
-			fz_moveto(ctx, path, x1, y1);
-			fz_lineto(ctx, path, x2, y2);
-			svg_stroke(ctx, dev, doc, path, &local_state);
-		}
+		if (local_state.stroke_mat.type == SVG_MATERIAL_NONE)
+			break;
+
+		path = fz_new_path(ctx);
+		fz_moveto(ctx, path, x1, y1);
+		fz_lineto(ctx, path, x2, y2);
+		svg_stroke(ctx, dev, doc, path, &local_state);
 	}
 	fz_always(ctx)
 	{
@@ -427,11 +488,11 @@ svg_run_polyline(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *nod
 	{
 		svg_parse_common(ctx, doc, node, &local_state);
 
-		if (local_state.stroke_is_set)
-		{
-			path = svg_parse_polygon_imp(ctx, doc, node, 0);
-			svg_stroke(ctx, dev, doc, path, &local_state);
-		}
+		if (local_state.stroke_mat.type == SVG_MATERIAL_NONE)
+			break;
+
+		path = svg_parse_polygon_imp(ctx, doc, node, 0);
+		svg_stroke(ctx, dev, doc, path, &local_state);
 	}
 	fz_always(ctx)
 	{
@@ -1038,9 +1099,6 @@ svg_parse_viewbox(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *s
 	}
 }
 
-static const char *linecap_table[] = { "butt", "round", "square" };
-static const char *linejoin_table[] = { "miter", "round", "bevel" };
-
 /* parse transform and presentation attributes */
 static void
 svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *state)
@@ -1050,8 +1108,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 	char *transform_att = fz_xml_att(node, "transform");
 
 	char *font_size_att = fz_xml_att(node, "font-size");
-
-	char *style_att = fz_xml_att(node, "style");
 
 	// TODO: clip, clip-path, clip-rule
 
@@ -1075,13 +1131,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 	// TODO: mask
 
 	/* Dirty hack scans of CSS style */
-	if (style_att)
-	{
-		svg_parse_color_from_style(ctx, doc, style_att,
-			&state->fill_is_set, state->fill_color,
-			&state->stroke_is_set, state->stroke_color);
-	}
-
 	if (transform_att)
 	{
 		state->transform = svg_parse_transform(ctx, doc, transform_att, state->transform);
@@ -1091,10 +1140,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 	{
 		state->fontsize = svg_parse_length(font_size_att, state->fontsize, state->fontsize);
 	}
-	else
-	{
-		state->fontsize = svg_parse_number_from_style(ctx, doc, style_att, "font-size", state->fontsize);
-	}
 
 	if (opacity_att)
 	{
@@ -1103,15 +1148,7 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 
 	if (fill_att)
 	{
-		if (!strcmp(fill_att, "none"))
-		{
-			state->fill_is_set = 0;
-		}
-		else
-		{
-			state->fill_is_set = 1;
-			svg_parse_color(ctx, doc, fill_att, state->fill_color);
-		}
+		svg_parse_color(ctx, doc, fill_att, &state->fill_mat, &state->fill_opacity);
 	}
 
 	if (fill_opacity_att)
@@ -1127,15 +1164,7 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 
 	if (stroke_att)
 	{
-		if (!strcmp(stroke_att, "none"))
-		{
-			state->stroke_is_set = 0;
-		}
-		else
-		{
-			state->stroke_is_set = 1;
-			svg_parse_color(ctx, doc, stroke_att, state->stroke_color);
-		}
+		svg_parse_color(ctx, doc, stroke_att, &state->stroke_mat, &state->stroke_opacity);
 	}
 
 	if (stroke_opacity_att)
@@ -1148,10 +1177,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 		else
 			stroke->linewidth = svg_parse_length(stroke_width_att, state->viewbox_size, state->fontsize);
 	}
-	else
-	{
-		stroke->linewidth = svg_parse_number_from_style(ctx, doc, style_att, "stroke-width", state->stroke->linewidth);
-	}
 
 	if (stroke_linecap_att)
 	{
@@ -1161,11 +1186,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 			stroke->start_cap = FZ_LINECAP_ROUND;
 		if (!strcmp(stroke_linecap_att, "square"))
 			stroke->start_cap = FZ_LINECAP_SQUARE;
-	}
-	else
-	{
-		stroke->start_cap = svg_parse_enum_from_style(ctx, doc, style_att, "stroke-linecap",
-			nelem(linecap_table), linecap_table, stroke->start_cap);
 	}
 
 	stroke->dash_cap = stroke->start_cap;
@@ -1180,11 +1200,6 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 		if (!strcmp(stroke_linejoin_att, "bevel"))
 			stroke->linejoin = FZ_LINEJOIN_BEVEL;
 	}
-	else
-	{
-		stroke->linejoin = svg_parse_enum_from_style(ctx, doc, style_att, "stroke-linejoin",
-			nelem(linejoin_table), linejoin_table, stroke->linejoin);
-	}
 
 	if (stroke_miterlimit_att)
 	{
@@ -1193,40 +1208,27 @@ svg_parse_common(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *st
 		else
 			stroke->miterlimit = svg_parse_length(stroke_miterlimit_att, state->viewbox_size, state->fontsize);
 	}
-	else
-	{
-		stroke->miterlimit = svg_parse_number_from_style(ctx, doc, style_att, "stroke-miterlimit", state->stroke->miterlimit);
-	}
 }
 
 static void
 svg_parse_font_attributes(fz_context *ctx, svg_document *doc, fz_xml *node, svg_state *state, char *buf, int buf_size)
 {
-	char *style_att = fz_xml_att(node, "style");
 	char *font_family_att = fz_xml_att(node, "font-family");
 	char *font_weight_att = fz_xml_att(node, "font-weight");
 	char *font_style_att = fz_xml_att(node, "font-style");
 	char *text_anchor_att = fz_xml_att(node, "text-anchor");
 
 	if (font_family_att)
+	{
 		fz_strlcpy(buf, font_family_att, buf_size);
-	else
-		svg_parse_string_from_style(ctx, doc, style_att, "font-family", buf, buf_size, state->font_family);
-	state->font_family = buf;
+		state->font_family = buf;
+	}
 
 	if (font_weight_att)
 	{
 		state->is_bold = atoi(font_weight_att) > 400;
 		if (!strcmp(font_weight_att, "bold")) state->is_bold = 1;
 		if (!strcmp(font_weight_att, "bolder")) state->is_bold = 1;
-	}
-	else
-	{
-		static const char *is_bold_table[] = {
-			"normal", "100", "200", "300", "400", "bold", "bolder", "500", "600", "700", "800", "900"
-		};
-		state->is_bold = svg_parse_enum_from_style(ctx, doc, style_att, "font-weight",
-			nelem(is_bold_table), is_bold_table, state->is_bold ? 5 : 0) >= 5;
 	}
 
 	if (font_style_att)
@@ -1235,28 +1237,12 @@ svg_parse_font_attributes(fz_context *ctx, svg_document *doc, fz_xml *node, svg_
 		if (!strcmp(font_style_att, "italic")) state->is_italic = 1;
 		if (!strcmp(font_style_att, "oblique")) state->is_italic = 1;
 	}
-	else
-	{
-		static const char *is_italic_table[] = {
-			"normal", "italic", "oblique"
-		};
-		state->is_italic = svg_parse_enum_from_style(ctx, doc, style_att, "font-style",
-			nelem(is_italic_table), is_italic_table, state->is_italic) >= 1;
-	}
 
 	if (text_anchor_att)
 	{
 		state->text_anchor = 0;
 		if (!strcmp(text_anchor_att, "middle")) state->text_anchor = 1;
 		if (!strcmp(text_anchor_att, "end")) state->text_anchor = 2;
-	}
-	else
-	{
-		static const char *text_anchor_table[] = {
-			"start", "middle", "end"
-		};
-		state->text_anchor = svg_parse_enum_from_style(ctx, doc, style_att, "text-anchor",
-			nelem(text_anchor_table), text_anchor_table, state->text_anchor);
 	}
 }
 
@@ -1413,16 +1399,19 @@ svg_run_image(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *root, 
 {
 	svg_state local_state;
 	float x=0, y=0, w=0, h=0;
-	const char *data;
-
-	static const char *jpeg_uri = "data:image/jpeg;base64,";
-	static const char *png_uri = "data:image/png;base64,";
 
 	char *href_att = fz_xml_att_alt(root, "xlink:href", "href");
 	char *x_att = fz_xml_att(root, "x");
 	char *y_att = fz_xml_att(root, "y");
 	char *w_att = fz_xml_att(root, "width");
 	char *h_att = fz_xml_att(root, "height");
+	fz_buffer *buf = NULL;
+	fz_image *img = NULL;
+	fz_matrix orient;
+	char path[2048];
+
+	fz_var(buf);
+	fz_var(img);
 
 	svg_begin_state(ctx, &local_state, inherit_state);
 	fz_try(ctx)
@@ -1430,95 +1419,78 @@ svg_run_image(fz_context *ctx, fz_device *dev, svg_document *doc, fz_xml *root, 
 		svg_parse_common(ctx, doc, root, &local_state);
 		if (x_att) x = svg_parse_length(x_att, local_state.viewbox_w, local_state.fontsize);
 		if (y_att) y = svg_parse_length(y_att, local_state.viewbox_h, local_state.fontsize);
-		if (w_att) w = svg_parse_length(w_att, local_state.viewbox_w, local_state.fontsize);
-		if (h_att) h = svg_parse_length(h_att, local_state.viewbox_h, local_state.fontsize);
-
-		if (w <= 0 || h <= 0)
-			break; // out of try-catch
 
 		if (!href_att)
 			break; // out of try-catch
 
-		local_state.transform = fz_concat(fz_translate(x, y), local_state.transform);
-		local_state.transform = fz_concat(fz_scale(w, h), local_state.transform);
-
-		if (!strncmp(href_att, jpeg_uri, strlen(jpeg_uri)))
-			data = href_att + strlen(jpeg_uri);
-		else if (!strncmp(href_att, png_uri, strlen(png_uri)))
-			data = href_att + strlen(png_uri);
-		else
-			data = NULL;
-		if (data)
+		if (!strncmp(href_att, "data:", 5))
 		{
-			fz_image *img = NULL;
-			fz_buffer *buf;
-
-			fz_var(img);
-
-			buf = fz_new_buffer_from_base64(ctx, data, 0);
-			fz_try(ctx)
-			{
-				fz_matrix orient;
-				img = fz_new_image_from_buffer(ctx, buf);
-				orient = fz_image_orientation_matrix(ctx, img);
-				local_state.transform = fz_concat(orient, local_state.transform);
-				fz_fill_image(ctx, dev, img, local_state.transform, 1, fz_default_color_params);
-			}
-			fz_always(ctx)
-			{
-				fz_drop_buffer(ctx, buf);
-				fz_drop_image(ctx, img);
-			}
-			fz_catch(ctx)
-			{
-				fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
-				fz_report_error(ctx);
-				fz_warn(ctx, "svg: ignoring embedded image '%s'", href_att);
-			}
+			buf = fz_parse_data_uri_with_media_type(ctx, href_att, "image/jpeg");
+			if (!buf)
+				buf = fz_parse_data_uri_with_media_type(ctx, href_att, "image/png");
+			if (!buf)
+				fz_warn(ctx, "svg: ignoring data-uri image '%s'", href_att);
 		}
 		else if (doc->zip)
 		{
-			char path[2048];
-			fz_buffer *buf = NULL;
-			fz_image *img = NULL;
-
-			fz_var(buf);
-			fz_var(img);
-
 			fz_strlcpy(path, doc->base_uri, sizeof path);
 			fz_strlcat(path, "/", sizeof path);
 			fz_strlcat(path, href_att, sizeof path);
 			fz_urldecode(path);
 
-			fz_try(ctx)
-			{
-				fz_matrix orient;
-				buf = fz_read_archive_entry(ctx, doc->zip, path);
-				img = fz_new_image_from_buffer(ctx, buf);
-				orient = fz_image_orientation_matrix(ctx, img);
-				local_state.transform = fz_concat(orient, local_state.transform);
-				fz_fill_image(ctx, dev, img, local_state.transform, 1, fz_default_color_params);
-			}
-			fz_always(ctx)
-			{
-				fz_drop_buffer(ctx, buf);
-				fz_drop_image(ctx, img);
-			}
-			fz_catch(ctx)
-			{
-				fz_rethrow_if(ctx, FZ_ERROR_SYSTEM);
-				fz_report_error(ctx);
-				fz_warn(ctx, "svg: ignoring external image '%s'", href_att);
-			}
+			buf = fz_read_archive_entry(ctx, doc->zip, path);
 		}
 		else
 		{
 			fz_warn(ctx, "svg: ignoring external image '%s'", href_att);
 		}
+		if (!buf)
+			break;
 
+		img = fz_new_image_from_buffer(ctx, buf);
+		orient = fz_image_orientation_matrix(ctx, img);
+
+		if (w_att && strcmp(w_att, "auto") != 0)
+		{
+			w = svg_parse_length(w_att, local_state.viewbox_w, local_state.fontsize);
+			if (h_att && strcmp(h_att, "auto") != 0)
+				h = svg_parse_length(h_att, local_state.viewbox_h, local_state.fontsize);
+			else
+			{
+				/* Derive h from w and aspect ratio */
+				if (img->w)
+					h = w * img->h / img->w;
+			}
+		}
+		else if (h_att && strcmp(h_att, "auto") != 0)
+		{
+			h = svg_parse_length(h_att, local_state.viewbox_h, local_state.fontsize);
+			/* Derive w from h and aspect ratio */
+			if (img->h)
+				w = h * img->w / img->h;
+		}
+		else if (img->w > 0 && img->h > 0)
+		{
+			/* In the absence of either a width or height tag, we are supposed to
+			 * assume the 'native' pixel sizes, with no scaling to fit. */
+			w = img->w;
+			h = img->h;
+		}
+
+		if (w <= 0 || h <= 0)
+			break; // out of try-catch
+		local_state.transform = fz_concat(fz_translate(x, y), local_state.transform);
+		local_state.transform = fz_concat(fz_scale(w, h), local_state.transform);
+
+		local_state.transform = fz_concat(orient, local_state.transform);
+		fz_fill_image(ctx, dev, img, local_state.transform, 1, fz_default_color_params);
 	}
 	fz_always(ctx)
+	{
+		fz_drop_buffer(ctx, buf);
+		fz_drop_image(ctx, img);
 		svg_end_state(ctx, &local_state);
+	}
 	fz_catch(ctx)
 		fz_rethrow(ctx);
 }
@@ -1592,20 +1564,38 @@ svg_run_text_string(fz_context *ctx, fz_device *dev, fz_matrix trm, const char *
 
 		trm = fz_show_string(ctx, text, font, trm, s, 0, 0, FZ_BIDI_LTR, FZ_LANG_UNSET);
 
-		if (state->fill_is_set)
+		switch (state->fill_mat.type)
+		{
+		case SVG_MATERIAL_COLOR:
 			fz_fill_text(ctx, dev, text,
 				state->transform,
-				fz_device_rgb(ctx), state->fill_color,
+				fz_device_rgb(ctx), state->fill_mat.u.color,
 				state->opacity,
 				fz_default_color_params);
-		if (state->stroke_is_set)
+			break;
+		case SVG_MATERIAL_SHADE:
+			/* FIXME */
+			break;
+		default:
+			break;
+		}
+		switch (state->stroke_mat.type)
+		{
+		case SVG_MATERIAL_COLOR:
 			fz_stroke_text(ctx, dev, text,
 				state->stroke,
 				state->transform,
-				fz_device_rgb(ctx), state->stroke_color,
+				fz_device_rgb(ctx), state->stroke_mat.u.color,
 				state->opacity,
 				fz_default_color_params);
-		if (!state->fill_is_set && !state->stroke_is_set)
+			break;
+		case SVG_MATERIAL_SHADE:
+			/* FIXME */
+			break;
+		default:
+			break;
+		}
+		if (state->fill_mat.type == SVG_MATERIAL_NONE && state->stroke_mat.type == SVG_MATERIAL_NONE)
 			fz_ignore_text(ctx, dev, text, state->transform);
 	}
 	fz_always(ctx)
@@ -1811,22 +1801,17 @@ svg_run_document(fz_context *ctx, svg_document *doc, fz_xml *root, fz_device *de
 	state.viewbox_h = DEF_HEIGHT;
 	state.viewbox_size = sqrtf(DEF_WIDTH*DEF_WIDTH + DEF_HEIGHT*DEF_HEIGHT) / sqrtf(2);
 
-	state.fontsize = 12;
+	state.fontsize = DEF_FONTSIZE;
 
 	state.opacity = 1;
 
 	state.fill_rule = 0;
 
-	state.fill_is_set = 1;
-	state.fill_color[0] = 0;
-	state.fill_color[1] = 0;
-	state.fill_color[2] = 0;
+	state.fill_mat.type = SVG_MATERIAL_COLOR;
+	memset(state.fill_mat.u.color, 0, sizeof(float) * 3);
 	state.fill_opacity = 1;
 
-	state.stroke_is_set = 0;
-	state.stroke_color[0] = 0;
-	state.stroke_color[1] = 0;
-	state.stroke_color[2] = 0;
+	state.stroke_mat.type = SVG_MATERIAL_NONE;
 	state.stroke_opacity = 1;
 
 	state.font_family = "serif";

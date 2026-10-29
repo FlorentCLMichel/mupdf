@@ -31,9 +31,9 @@
 #include <string.h>
 
 #include <stdio.h> /* for debug printing */
-/* #define DEBUG_HEAP_SORT */
-/* #define DEBUG_WRITING */
-/* #define DEBUG_MARK_AND_SWEEP */
+//#define DEBUG_HEAP_SORT
+//#define DEBUG_WRITING
+//#define DEBUG_MARK_AND_SWEEP
 
 #define SIG_EXTRAS_SIZE (1024)
 
@@ -60,6 +60,7 @@ typedef struct
 	int do_preserve_metadata;
 	int do_use_objstms;
 	int compression_effort;
+	int reproducible;
 
 	int list_len;
 	int *use_list;
@@ -530,7 +531,10 @@ static void renumberobjs(fz_context *ctx, pdf_document *doc, pdf_write_state *op
 		pdf_obj *trailer = pdf_trailer(ctx, doc);
 		nval = renumberobj(ctx, doc, opts, trailer);
 		if (nval != trailer)
+		{
 			pdf_set_trailer(ctx, doc, nval);
+			pdf_drop_obj(ctx, nval);
+		}
 		nval = NULL;
 		for (num = 0; num < xref_len; num++)
 		{
@@ -551,13 +555,17 @@ static void renumberobjs(fz_context *ctx, pdf_document *doc, pdf_write_state *op
 				else
 					nval = pdf_new_indirect(ctx, doc, opts->renumber_map[o], 0);
 				pdf_update_object(ctx, doc, num, nval);
+				pdf_drop_obj(ctx, nval);
 				nval = NULL;
 			}
 			else
 			{
 				nval = renumberobj(ctx, doc, opts, obj);
 				if (nval != obj)
+				{
 					pdf_update_object(ctx, doc, num, nval);
+					pdf_drop_obj(ctx, nval);
+				}
 				nval = NULL;
 			}
 		}
@@ -711,7 +719,8 @@ static void preloadobjstms(fz_context *ctx, pdf_document *doc)
 static int is_bitmap_stream(fz_context *ctx, pdf_obj *obj, size_t len, int *w, int *h)
 {
 	pdf_obj *bpc;
-	pdf_obj *cs;
+	pdf_obj *csobj;
+	fz_colorspace *cs = NULL;
 	int stride;
 	if (pdf_dict_get(ctx, obj, PDF_NAME(Subtype)) != PDF_NAME(Image))
 		return 0;
@@ -726,15 +735,28 @@ static int is_bitmap_stream(fz_context *ctx, pdf_obj *obj, size_t len, int *w, i
 	}
 	else
 	{
+		int isbitmap = 0;
+
 		bpc = pdf_dict_get(ctx, obj, PDF_NAME(BitsPerComponent));
 		if (!pdf_is_int(ctx, bpc))
 			return 0;
 		if (pdf_to_int(ctx, bpc) != 1)
 			return 0;
-		cs = pdf_dict_get(ctx, obj, PDF_NAME(ColorSpace));
-		if (!pdf_name_eq(ctx, cs, PDF_NAME(DeviceGray)))
+		csobj = pdf_dict_get(ctx, obj, PDF_NAME(ColorSpace));
+		if (!csobj)
 			return 0;
-		return 1;
+		fz_var(cs);
+		fz_try(ctx)
+		{
+			cs = pdf_load_colorspace(ctx, csobj);
+			if (fz_colorspace_n(ctx, cs) == 1)
+				isbitmap = 1;
+		}
+		fz_always(ctx)
+			fz_drop_colorspace(ctx, cs);
+		fz_catch(ctx)
+			fz_rethrow(ctx);
+		return isbitmap;
 	}
 }
 
@@ -1029,7 +1051,9 @@ static void copystream(fz_context *ctx, pdf_document *doc, pdf_write_state *opts
 			pdf_encrypt_data(ctx, opts->crypt, num, gen, write_data, opts->out, data, len);
 		}
 
-		fz_write_string(ctx, opts->out, "\nendstream\nendobj\n\n");
+		fz_write_string(ctx, opts->out, "\nendstream\nendobj\n");
+		if (!opts->do_tight)
+			fz_write_char(ctx, opts->out, '\n');
 	}
 	fz_always(ctx)
 	{
@@ -1127,7 +1151,9 @@ static void expandstream(fz_context *ctx, pdf_document *doc, pdf_write_state *op
 			pdf_encrypt_data(ctx, opts->crypt, num, gen, write_data, opts->out, data, len);
 		}
 
-		fz_write_string(ctx, opts->out, "\nendstream\nendobj\n\n");
+		fz_write_string(ctx, opts->out, "\nendstream\nendobj\n");
+		if (!opts->do_tight)
+			fz_write_char(ctx, opts->out, '\n');
 	}
 	fz_always(ctx)
 	{
@@ -1305,6 +1331,9 @@ static void writeobject(fz_context *ctx, pdf_document *doc, pdf_write_state *opt
 
 			if (pdf_obj_num_is_stream(ctx, doc, num))
 			{
+				if (pdf_is_stream_external(ctx, obj))
+					pdf_internalize_external_stream(ctx, doc, num);
+
 				do_deflate = opts->do_compress;
 				do_expand = opts->do_expand;
 				if (opts->do_compress_images && pdf_is_image_stream(ctx, obj))
@@ -1325,7 +1354,9 @@ static void writeobject(fz_context *ctx, pdf_document *doc, pdf_write_state *opt
 			{
 				fz_write_printf(ctx, opts->out, "%d %d obj\n", num, gen);
 				pdf_print_encrypted_obj(ctx, opts->out, obj, opts->do_tight, opts->do_ascii, unenc ? NULL : opts->crypt, num, gen, NULL);
-				fz_write_string(ctx, opts->out, "\nendobj\n\n");
+				fz_write_string(ctx, opts->out, "\nendobj\n");
+				if (!opts->do_tight)
+					fz_write_char(ctx, opts->out, '\n');
 			}
 		}
 	}
@@ -1682,11 +1713,16 @@ writeobjects(fz_context *ctx, pdf_document *doc, pdf_write_state *opts)
 		fz_write_string(ctx, opts->out, "%\xC2\xB5\xC2\xB6\n");
 	}
 
+	if (opts->reproducible)
+		fz_write_string(ctx, opts->out, "% Written by MuPDF\n");
+	else
 #ifdef CLUSTER
-	fz_write_string(ctx, opts->out, "% Written by MuPDF CLUSTER\n\n");
+		fz_write_string(ctx, opts->out, "% Written by MuPDF CLUSTER\n");
 #else
-	fz_write_string(ctx, opts->out, "% Written by MuPDF " FZ_VERSION "\n\n");
+		fz_write_string(ctx, opts->out, "% Written by MuPDF " FZ_VERSION "\n");
 #endif
+	if (!opts->do_tight)
+		fz_write_char(ctx, opts->out, '\n');
 
 	for (num = 0; num < xref_len; num++)
 		dowriteobject(ctx, doc, opts, num);
@@ -1933,6 +1969,7 @@ static void initialise_write_state(fz_context *ctx, pdf_document *doc, const pdf
 	opts->dont_regenerate_id = in_opts->dont_regenerate_id;
 	opts->do_preserve_metadata = in_opts->do_preserve_metadata;
 	opts->do_use_objstms = in_opts->do_use_objstms;
+	opts->reproducible = in_opts->reproducible;
 
 	opts->permissions = in_opts->permissions;
 	memcpy(opts->opwd_utf8, in_opts->opwd_utf8, nelem(opts->opwd_utf8));
@@ -2029,6 +2066,7 @@ const char *fz_pdf_write_options_usage =
 	"\tuser-password=PASSWORD: password required to read document\n"
 	"\towner-password=PASSWORD: password required to edit document\n"
 	"\tregenerate-id: (default yes) regenerate document id\n"
+	"\treproducible: (default no) attempt to make document writes reproducible\n"
 	"\n";
 
 void
@@ -2091,6 +2129,7 @@ pdf_apply_write_options(fz_context *ctx, pdf_write_options *opts, fz_options *ar
 	fz_lookup_option_boolean(ctx, args, "sanitize", &opts->do_sanitize);
 	fz_lookup_option_boolean(ctx, args, "incremental", &opts->do_incremental);
 	fz_lookup_option_boolean(ctx, args, "objstms", &opts->do_use_objstms);
+	fz_lookup_option_boolean(ctx, args, "reproducible", &opts->reproducible);
 
 	fz_lookup_option_integer(ctx, args, "compression-effort", &opts->compression_effort);
 
@@ -2878,6 +2917,9 @@ do_pdf_save_document(fz_context *ctx, pdf_document *doc, pdf_write_state *opts, 
 		}
 
 		pdf_sync_open_pages(ctx, doc);
+
+		// mark incremental sections as having been saved
+		doc->num_incremental_sections = 0;
 
 		pdf_end_operation(ctx, doc);
 	}

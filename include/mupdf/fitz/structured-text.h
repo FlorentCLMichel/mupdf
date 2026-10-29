@@ -24,7 +24,6 @@
 #define MUPDF_FITZ_STRUCTURED_TEXT_H
 
 #include "mupdf/fitz/system.h"
-#include "mupdf/fitz/types.h"
 #include "mupdf/fitz/context.h"
 #include "mupdf/fitz/geometry.h"
 #include "mupdf/fitz/font.h"
@@ -51,7 +50,7 @@ typedef struct fz_layout_line
 	struct fz_layout_line *next;
 } fz_layout_line;
 
-typedef struct
+typedef struct fz_layout_block
 {
 	fz_pool *pool;
 	fz_matrix matrix;
@@ -191,7 +190,7 @@ typedef struct fz_stext_grid_positions fz_stext_grid_positions;
 	FZ_STEXT_USE_GID_FOR_UNKNOWN_UNICODE will give undefined behaviour.
 
 */
-enum
+enum fz_stext_option_flags
 {
 	FZ_STEXT_PRESERVE_LIGATURES = 1,
 	FZ_STEXT_PRESERVE_WHITESPACE = 2,
@@ -221,111 +220,116 @@ enum
 };
 
 /**
- *	A note on stext's handling of structure.
- *
- *	A PDF document can contain a structure tree. This gives the
- *	structure of a document in its entirety as a tree. e.g.
- *
- *	Tree			MCID	INDEX
- *	-------------------------------------
- *	DOC			0	0
- *	 TOC			1	0
- *	  TOC_ITEM		2	0
- *	  TOC_ITEM		3	1
- *	  TOC_ITEM		4	2
- *	  ...
- *	 STORY			100	1
- *	  SECTION		101	0
- *	   HEADING		102	0
- *	   SUBSECTION		103	1
- *	    PARAGRAPH		104	0
- *	    PARAGRAPH		105	1
- *	    PARAGRAPH		106	2
- *	   SUBSECTION		107	2
- *	    PARAGRAPH		108	0
- *	    PARAGRAPH		109	1
- *	    PARAGRAPH		110	2
- *	   ...
- *	  SECTION		200	1
- *      ...
- *
- *	Each different section of the tree is identified as part of an
- *	MCID by a number (this is a slight simplification, but makes the
- *	explanation easier).
- *
- *	The PDF document contains markings that say "Entering MCID 0"
- *	and "Leaving MCID 0". Any content within that region is therefore
- *	identified as appearing in that particular structural region.
- *
- *	This means that content can be sent in the document in a different
- *	order to which it appears 'logically' in the tree.
- *
- *	MuPDF converts this tree form into a nested series of calls to
- *	begin_structure and end_structure.
- *
- *	For instance, if the document started out with MCID 100, then
- *	we'd send:
- *		begin_structure("DOC")
- *		begin_structure("STORY")
- *
- *	The problem with this is that if we send:
- *		begin_structure("DOC")
- *		begin_structure("STORY")
- *		begin_structure("SECTION")
- *		begin_structure("SUBSECTION")
- *
- *	or
- *		begin_structure("DOC")
- *		begin_structure("STORY")
- *		begin_structure("SECTION")
- *		begin_structure("HEADING")
- *
- *	How do I know what order the SECTION and HEADING should appear in?
- *	Are they even in the same STORY? Or the same DOC?
- *
- *	Accordingly, every begin_structure is accompanied not only with the
- *	node type, but with an index. The index is the number of this node
- *	within this level of the tree. Hence:
- *
- *		begin_structure("DOC", 0)
- *		begin_structure("STORY", 0)
- *		begin_structure("SECTION", 0)
- *		begin_structure("HEADING", 0)
- *	and
- *		begin_structure("DOC", 0)
- *		begin_structure("STORY", 0)
- *		begin_structure("SECTION", 0)
- *		begin_structure("SUBSECTION", 1)
- *
- *	are now unambiguous in their describing of the tree.
- *
- *	MuPDF automatically sends the minimal end_structure/begin_structure
- *	pairs to move us between nodes in the tree.
- *
- *	In order to accommodate this information within the structured text
- *	data structures an additional block type is used. Previously a
- *	"page" was just a list of blocks, either text or images. e.g.
- *
- *	[BLOCK:TEXT] <-> [BLOCK:IMG] <-> [BLOCK:TEXT] <-> [BLOCK:TEXT] ...
- *
- *	We now introduce a new type of block, STRUCT, that turns this into
- *	a tree:
- *
- *	[BLOCK:TEXT] <-> [BLOCK:STRUCT(IDX=0)] <-> [BLOCK:TEXT] <-> ...
- *	                      /|\
- *	[STRUCT:TYPE=DOC] <----
- *	    |
- *	[BLOCK:TEXT] <-> [BLOCK:STRUCT(IDX=0)] <-> [BLOCK:TEXT] <-> ...
- *	                      /|\
- *	[STRUCT:TYPE=STORY] <--
- *	    |
- *	   ...
- *
- *	Rather than doing a simple linear traversal of the list to extract
- *	the logical data, a caller now has to do a depth-first traversal.
- */
+	## A note on stext's handling of structure.
 
-typedef struct
+	A PDF document can contain a structure tree. This gives the
+	structure of a document in its entirety as a tree. e.g.
+
+		Tree						MCID	INDEX
+		-------------------------------------------------------------
+		DOC						0	0
+			TOC					1	0
+				TOC_ITEM			2	0
+				TOC_ITEM			3	1
+				TOC_ITEM			4	2
+				...
+			STORY					100	1
+				SECTION				101	0
+					HEADING			102	0
+					SUBSECTION		103	1
+						PARAGRAPH	104	0
+						PARAGRAPH	105	1
+						PARAGRAPH	106	2
+					SUBSECTION		107	2
+						PARAGRAPH	108	0
+						PARAGRAPH	109	1
+						PARAGRAPH	110	2
+					...
+				SECTION				200	1
+		...
+
+	Each different section of the tree is identified as part of an
+	MCID by a number (this is a slight simplification, but makes the
+	explanation easier).
+
+	The PDF document contains markings that say "Entering MCID 0"
+	and "Leaving MCID 0". Any content within that region is therefore
+	identified as appearing in that particular structural region.
+
+	This means that content can be sent in the document in a different
+	order to which it appears 'logically' in the tree.
+
+	MuPDF converts this tree form into a nested series of calls to
+	begin_structure and end_structure.
+
+	For instance, if the document started out with MCID 100, then
+	we'd send:
+
+		begin_structure("DOC")
+		begin_structure("STORY")
+
+	The problem with this is that if we send:
+
+		begin_structure("DOC")
+		begin_structure("STORY")
+		begin_structure("SECTION")
+		begin_structure("SUBSECTION")
+
+	or
+
+		begin_structure("DOC")
+		begin_structure("STORY")
+		begin_structure("SECTION")
+		begin_structure("HEADING")
+
+	How do I know what order the SECTION and HEADING should appear in?
+	Are they even in the same STORY? Or the same DOC?
+
+	Accordingly, every begin_structure is accompanied not only with the
+	node type, but with an index. The index is the number of this node
+	within this level of the tree. Hence:
+
+		begin_structure("DOC", 0)
+		begin_structure("STORY", 0)
+		begin_structure("SECTION", 0)
+		begin_structure("HEADING", 0)
+
+	and
+
+		begin_structure("DOC", 0)
+		begin_structure("STORY", 0)
+		begin_structure("SECTION", 0)
+		begin_structure("SUBSECTION", 1)
+
+	are now unambiguous in their describing of the tree.
+
+	MuPDF automatically sends the minimal end_structure/begin_structure
+	pairs to move us between nodes in the tree.
+
+	In order to accommodate this information within the structured text
+	data structures an additional block type is used. Previously a
+	"page" was just a list of blocks, either text or images. e.g.
+
+		[BLOCK:TEXT] <-> [BLOCK:IMG] <-> [BLOCK:TEXT] <-> [BLOCK:TEXT] ...
+
+	We now introduce a new type of block, STRUCT, that turns this into
+	a tree:
+
+		[BLOCK:TEXT] <-> [BLOCK:STRUCT(IDX=0)] <-> [BLOCK:TEXT] <-> ...
+					/|\
+		[STRUCT:TYPE=DOC] <------+
+			|
+		[BLOCK:TEXT] <-> [BLOCK:STRUCT(IDX=0)] <-> [BLOCK:TEXT] <-> ...
+					/|\
+		[STRUCT:TYPE=STORY] <----+
+			|
+			...
+
+	Rather than doing a simple linear traversal of the list to extract
+	the logical data, a caller now has to do a depth-first traversal.
+*/
+
+typedef struct fz_stext_page_details
 {
 	fz_rect mediabox;
 	int chapter;
@@ -340,7 +344,7 @@ typedef struct
 	should really be fz_stext_document, cos it can contain
 	content from multiple pages.
 */
-typedef struct
+typedef struct fz_stext_page
 {
 	int refs;
 	fz_pool *pool;
@@ -368,7 +372,7 @@ fz_stext_page *fz_keep_stext_page(fz_context *ctx, fz_stext_page *page);
 */
 fz_stext_page_details *fz_stext_page_details_for_block(fz_context *ctx, fz_stext_page *page, fz_stext_block *block);
 
-enum
+enum fz_stext_block_type
 {
 	FZ_STEXT_BLOCK_TEXT = 0,
 	FZ_STEXT_BLOCK_IMAGE = 1,
@@ -377,7 +381,7 @@ enum
 	FZ_STEXT_BLOCK_GRID = 4
 };
 
-enum
+enum fz_stext_justify_flags
 {
 	FZ_STEXT_TEXT_JUSTIFY_UNKNOWN = 0,
 	FZ_STEXT_TEXT_JUSTIFY_LEFT = 1,
@@ -386,7 +390,7 @@ enum
 	FZ_STEXT_TEXT_JUSTIFY_FULL = 4,
 };
 
-enum
+enum fz_stext_vector_flags
 {
 	/* Indicates that this vector came from a stroked
 	 * path. */
@@ -399,10 +403,16 @@ enum
 	/* Indicates that this vector came from a path
 	 * segment, and more segments from this same path are
 	 * still to come. */
-	FZ_STEXT_VECTOR_CONTINUES = 4
+	FZ_STEXT_VECTOR_CONTINUES = 4,
+
+	/* Indicates that this was detected as being
+	 * part of an underline/strikeout/highlight. */
+	FZ_STEXT_VECTOR_IS_HIGHLIGHT = 8,
+	FZ_STEXT_VECTOR_IS_UNDERLINE = 16,
+	FZ_STEXT_VECTOR_IS_STRIKEOUT = 32
 };
 
-enum
+enum fz_stext_grid_flags
 {
 	/* Indicates that cell contents cross the right hand edge. */
 	FZ_STEXT_GRID_H_CROSSED = 1,
@@ -417,7 +427,7 @@ enum
 };
 
 /* This structure is experimental, and subject to change. */
-typedef struct
+typedef struct fz_stext_grid_info
 {
 	/* A 2x2 table, will be represented as a 3x3 set of
 	 * cells. The rightmost column and bottommost row
@@ -445,13 +455,13 @@ struct fz_stext_block
 		struct { fz_stext_line *first_line, *last_line; int flags;} t;
 		struct { fz_matrix transform; fz_image *image; } i;
 		struct { fz_stext_struct *down; int index; } s;
-		struct { uint32_t flags; uint32_t argb; } v;
-		struct { fz_stext_grid_positions *xs; fz_stext_grid_positions *ys; fz_stext_grid_info *info; } b;
+		struct { uint32_t flags, argb; } v;
+		struct { fz_stext_grid_positions *xs, *ys; fz_stext_grid_info *info; } b;
 	} u;
 	fz_stext_block *prev, *next;
 };
 
-typedef enum
+typedef enum fz_stext_line_flags
 {
 	FZ_STEXT_LINE_FLAGS_JOINED = 1
 } fz_stext_line_flags;
@@ -486,7 +496,7 @@ struct fz_stext_char
 	fz_stext_char *next;
 };
 
-enum
+enum fz_stext_char_flags
 {
 	FZ_STEXT_STRIKEOUT = 1,
 	FZ_STEXT_UNDERLINE = 2,
@@ -502,40 +512,17 @@ enum
 };
 
 /**
-	When we are collecting the structure information from
-	PDF structure trees/tags, we end up with a tree of
-	nodes. The structure should be walked in depth-first
-	traversal order to extract the content.
-
-	An fz_stext_struct pointer can be NULL to indicate that
-	we know there is a child there within the complete tree,
-	but we don't know what it is yet.
-*/
-struct fz_stext_struct
-{
-	/* up points to the block that contains this fz_stext_struct. */
-	fz_stext_block *up;
-	/* parent points to the struct that has up as one of its children.
-	 * parent is useful for doing depth first traversal without having
-	 * to store the entire chain of structs in the iterator. */
-	fz_stext_struct *parent;
-
-	/* first_block points to the first child of this node (or NULL
-	 * if there are none). */
-	fz_stext_block *first_block;
-	/* last_block points to the last child of this node (or NULL
-	 * if there are none). */
-	fz_stext_block *last_block;
-
-	/* We have a set of 'standard' structure types. Every structure
-	 * element should correspond to one of these. */
-	fz_structure standard;
-	/* Documents can use their own non-standard structure types, which
-	 * are held as 'raw' strings. */
-	char raw[FZ_FLEXIBLE_ARRAY];
-};
-
-/* An example to show how fz_stext_blocks and fz_stext_structs interact:
+ *	When we are collecting the structure information from
+ *	PDF structure trees/tags, we end up with a tree of
+ *	nodes. The structure should be walked in depth-first
+ *	traversal order to extract the content.
+ *
+ *	An fz_stext_struct pointer can be NULL to indicate that
+ *	we know there is a child there within the complete tree,
+ *	but we don't know what it is yet.
+ *
+ *	An example to show how fz_stext_blocks and fz_stext_structs interact:
+ * ```
  *
  *         [fz_stext_page]
  *             |
@@ -561,23 +548,47 @@ struct fz_stext_struct
  *                                  |   |
  *                       first_block|   |last_block
  *                                  :   :
+ * ```
  */
+struct fz_stext_struct
+{
+	/* up points to the block that contains this fz_stext_struct. */
+	fz_stext_block *up;
+	/* parent points to the struct that has up as one of its children.
+	 * parent is useful for doing depth first traversal without having
+	 * to store the entire chain of structs in the iterator. */
+	fz_stext_struct *parent;
 
- typedef struct
- {
+	/* first_block points to the first child of this node (or NULL
+	 * if there are none). */
+	fz_stext_block *first_block;
+	/* last_block points to the last child of this node (or NULL
+	 * if there are none). */
+	fz_stext_block *last_block;
+
+	/* We have a set of 'standard' structure types. Every structure
+	 * element should correspond to one of these. */
+	fz_structure standard;
+	/* Documents can use their own non-standard structure types, which
+	 * are held as 'raw' strings. */
+	char raw[FZ_FLEXIBLE_ARRAY];
+};
+
+typedef struct fz_stext_grid_divider
+{
 	int reinforcement;
 	float pos;
 	float min;
 	float max;
 	int uncertainty;
- } fz_stext_grid_divider;
+} fz_stext_grid_divider;
 
- struct fz_stext_grid_positions
- {
+struct fz_stext_grid_positions
+{
 	int len;
 	int max_uncertainty;
 	fz_stext_grid_divider list[FZ_FLEXIBLE_ARRAY];
- };
+};
 
 FZ_DATA extern const char *fz_stext_options_usage;
 
@@ -591,6 +602,7 @@ FZ_DATA extern const char *fz_stext_options_usage;
 */
 fz_stext_page *fz_new_stext_page(fz_context *ctx, fz_rect mediabox);
 void fz_drop_stext_page(fz_context *ctx, fz_stext_page *page);
+void fz_release_stext_block_run_resources(fz_context *ctx, fz_stext_block *block);
 
 /**
 	Output structured text to a file in HTML (visual) format.
@@ -615,7 +627,8 @@ void fz_print_stext_page_as_xml(fz_context *ctx, fz_output *out, fz_stext_page *
 	Output structured text to a file in XML format, with flags
 	to control how much of the structure is displayed.
 */
-typedef enum {
+typedef enum fz_stext_xml_flags
+{
 	FZ_STEXT_XML_FLAGS_CHARS = 1,
 	FZ_STEXT_XML_FLAGS_POINTERS = 2
 } fz_stext_xml_flags;
@@ -648,6 +661,19 @@ void fz_print_stext_page_as_text(fz_context *ctx, fz_output *out, fz_stext_page 
 	without notice.
 */
 int fz_search_stext_page(fz_context *ctx, fz_stext_page *text, const char *needle, int *hit_mark, fz_quad *hit_bbox, int hit_max);
+
+/**
+	Search for occurrence of 'needle' in text page, with a cookie
+	to allow us to abort if required.
+	Case insensitive match.
+
+	Return the number of quads and store hit quads in the passed in
+	array.
+
+	NOTE: This is an experimental interface and subject to change
+	without notice.
+*/
+int fz_search_stext_page_with_cookie(fz_context *ctx, fz_stext_page *page, const char *needle, int *hit_mark, fz_quad *quads, int max_quads, fz_cookie *cookie);
 
 /**
 	Callback function for use in searching.
@@ -690,7 +716,7 @@ int fz_search_stext_page_cb(fz_context *ctx, fz_stext_page *text, const char *ne
 */
 int fz_highlight_selection(fz_context *ctx, fz_stext_page *page, fz_point a, fz_point b, fz_quad *quads, int max_quads);
 
-enum
+enum fz_select_mode
 {
 	FZ_SELECT_CHARS,
 	FZ_SELECT_WORDS,
@@ -718,13 +744,47 @@ char *fz_copy_selection(fz_context *ctx, fz_stext_page *page, fz_point a, fz_poi
 char *fz_copy_rectangle(fz_context *ctx, fz_stext_page *page, fz_rect area, int crlf);
 
 /**
-	Options for creating structured text.
+	Options for controlling table hunt.
 */
 typedef struct
+{
+	int vertically_collapse_bordered_cells;
+} fz_table_hunt_options;
+
+enum {
+	/* Never collapse the contents of bordered cells vertically. */
+	FZ_TABLE_HUNT_VERTICAL_COLLAPSE_NO = 0,
+
+	/* Always collapse the contents of bordered cells vertically. */
+	FZ_TABLE_HUNT_VERTICAL_COLLAPSE_YES = 1
+};
+
+void fz_init_table_hunt_options(fz_context *ctx, fz_table_hunt_options *opts);
+
+/**
+	Parse table hunt options from a comma separated key-value
+	string.
+
+	This initialises the opts structure.
+*/
+fz_table_hunt_options *fz_parse_table_hunt_options(fz_context *ctx, fz_table_hunt_options *opts, const char *args);
+
+/**
+	Parse table hunt device options from an fz_options struct
+	into an already initialised opts structure.
+*/
+void fz_apply_table_hunt_options(fz_context *ctx, fz_table_hunt_options *opts, fz_options *options);
+
+
+/**
+	Options for creating structured text.
+*/
+typedef struct fz_stext_options
 {
 	int flags;
 	float scale;
 	fz_rect clip;
+	fz_table_hunt_options table_hunt_options;
 } fz_stext_options;
 
 void fz_init_stext_options(fz_context *ctx, fz_stext_options *opts);
@@ -795,13 +855,13 @@ void fz_paragraph_break(fz_context *ctx, fz_stext_page *page);
 	Hunt for possible tables on a page, and update the stext with
 	information.
 */
-void fz_table_hunt(fz_context *ctx, fz_stext_page *page);
+void fz_table_hunt(fz_context *ctx, fz_stext_page *page, const fz_table_hunt_options *opts);
 
 /**
 	Hunt for possible tables within a specific rect on a page, and
 	update the stext with information.
 */
-void fz_table_hunt_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds);
+void fz_table_hunt_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds, const fz_table_hunt_options *opts);
 
 /**
 	Interpret the bounded contents of a given stext page as
@@ -819,7 +879,7 @@ void fz_table_hunt_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect b
 	the table.
 */
 fz_stext_block *
-fz_find_table_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds);
+fz_find_table_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds, const fz_table_hunt_options *opts);
 
 /**
 	Interpret the contents of a given stext page that fall within
@@ -841,7 +901,7 @@ fz_find_table_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds
 	limit.
 */
 fz_stext_block *
-fz_find_table_within_grid(fz_context *ctx, fz_stext_page *page, fz_stext_grid_positions *xpos, fz_stext_grid_positions *ypos, float limit);
+fz_find_table_within_grid(fz_context *ctx, fz_stext_page *page, fz_stext_grid_positions *xpos, fz_stext_grid_positions *ypos, float limit, const fz_table_hunt_options *opts);
 
 /**
 	Try to guess at the table structure within given bounds.
@@ -855,7 +915,7 @@ fz_find_table_within_grid(fz_context *ctx, fz_stext_page *page, fz_stext_grid_po
 	freed.
 */
 int
-fz_propose_table_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds, fz_stext_grid_positions **xposp, fz_stext_grid_positions **yposp);
+fz_propose_table_within_bounds(fz_context *ctx, fz_stext_page *page, fz_rect bounds, fz_stext_grid_positions **xposp, fz_stext_grid_positions **yposp, const fz_table_hunt_options *opts);
 
 
 /**
@@ -910,6 +970,8 @@ fz_device *fz_new_stext_device(fz_context *ctx, fz_stext_page *page, const fz_st
 fz_device *
 fz_new_stext_device_for_page(fz_context *ctx, fz_stext_page *stext_page, const fz_stext_options *opts, int chapter_num, int page_num, fz_rect mediabox);
 
+/* Callback function to receive periodic progress updates from the OCR device. */
+typedef int (fz_ocr_progress_fn)(fz_context *ctx, void *arg, int progress);
 
 /**
 	Create a device to OCR the text on the page.
@@ -953,11 +1015,12 @@ fz_new_stext_device_for_page(fz_context *ctx, fz_stext_page *stext_page, const f
 	progress_arg: A void * value to be parrotted back to the progress
 	function.
 */
+
 fz_device *fz_new_ocr_device(fz_context *ctx, fz_device *target, fz_matrix ctm, fz_rect mediabox, int with_list, const char *language,
-			const char *datadir, int (*progress)(fz_context *, void *, int), void *progress_arg);
+			const char *datadir, fz_ocr_progress_fn *progress, void *progress_arg);
 
 fz_device *fz_new_ocr_device_with_options(fz_context *ctx, fz_device *target, fz_matrix ctm, fz_rect mediabox, int with_list, const char *language,
-			const char *datadir, int (*progress)(fz_context *, void *, int), void *progress_arg, fz_options *options);
+			const char *datadir, fz_ocr_progress_fn *progress, void *progress_arg, fz_options *options);
 
 fz_document *fz_open_reflowed_document(fz_context *ctx, fz_document *underdoc, const fz_stext_options *opts);
 
@@ -978,7 +1041,7 @@ int fz_is_unicode_hyphen(int c);
 
 typedef struct fz_search fz_search;
 
-typedef enum
+typedef enum fz_search_options
 {
 	FZ_SEARCH_EXACT = 0,
 	FZ_SEARCH_IGNORE_CASE = 1,
@@ -1004,7 +1067,7 @@ void fz_apply_search_options(fz_context *ctx, fz_search_options *options, fz_opt
 */
 fz_search *fz_new_search(fz_context *ctx, const char *needle, fz_search_options options);
 
-typedef enum
+typedef enum fz_search_reason
 {
 	/* Ran out of stext to search. Please feed me some more. */
 	FZ_SEARCH_MORE_INPUT = 0,
@@ -1013,16 +1076,19 @@ typedef enum
 	FZ_SEARCH_MATCH = 1,
 
 	/* Search complete */
-	FZ_SEARCH_COMPLETE
+	FZ_SEARCH_COMPLETE = 2,
+
+	/* Search aborted via cookie */
+	FZ_SEARCH_ABORT = 3
 } fz_search_reason;
 
-typedef struct
+typedef struct fz_search_quad
 {
 	int seq;
 	fz_quad quad;
 } fz_search_quad;
 
-typedef struct
+typedef struct fz_stext_position
 {
 	fz_stext_page *page;
 	fz_stext_struct *parent;
@@ -1031,7 +1097,7 @@ typedef struct
 	fz_stext_char *ch;
 } fz_stext_position;
 
-typedef struct
+typedef struct fz_search_match
 {
 	int num_quads;
 	fz_search_quad *quads;
@@ -1042,7 +1108,7 @@ typedef struct
 /**
 	Structure used to represent the 'result' of a search.
 */
-typedef struct
+typedef struct fz_search_result
 {
 	fz_search_reason reason;
 	union
@@ -1078,6 +1144,32 @@ fz_search_result fz_search_forwards(fz_context *ctx, fz_search *search);
 	Several pages may be requested before searching begins.
 */
 fz_search_result fz_search_backwards(fz_context *ctx, fz_search *search);
+
+/**
+	Continue searching forwards for the next match.
+
+	As for fz_search_forwards, but with the ability to abort
+	long running searches by using an optional cookie. Currently,
+	only the 'abort' field in the cookie is used, but the rest
+	should be zero-inited for future compatibility.
+
+	NOTE: This is an experimental interface and subject to change
+	without notice.
+*/
+fz_search_result fz_search_forwards_with_cookie(fz_context *ctx, fz_search *search, fz_cookie *cookie);
+
+/**
+	Continue searching backwards for the next match.
+
+	As for fz_search_backwards, but with the ability to abort
+	long running searches by using an optional cookie. Currently,
+	only the 'abort' field in the cookie is used, but the rest
+	should be zero-inited for future compatibility.
+
+	NOTE: This is an experimental interface and subject to change
+	without notice.
+*/
+fz_search_result fz_search_backwards_with_cookie(fz_context *ctx, fz_search *search, fz_cookie *cookie);
 
 /**
 	Supply more stext to be searched; ownership of the stext page is
@@ -1123,6 +1215,17 @@ void fz_drop_search(fz_context *ctx, fz_search *search);
 */
 int fz_match_stext_page(fz_context *ctx, fz_stext_page *text, const char *needle, int *hit_mark, fz_quad *hit_bbox, int hit_max, fz_search_options options);
 
+/*
+	As for fz_match_stext_page, but with the addition that an
+	optional cookie can be used to abort operation. Only the
+	abort field in the cookie is currently used, but the rest of
+	the structure should be zero inited for future compatibility.
+
+	NOTE: This is an experimental interface and subject to change
+	without notice.
+*/
+int fz_match_stext_page_with_cookie(fz_context *ctx, fz_stext_page *page, const char *needle, int *hit_mark, fz_quad *hit_bbox, int hit_max, fz_search_options options, fz_cookie *cookie);
+
 /**
 	Search for occurrence of 'needle' in text page.
 
@@ -1139,6 +1242,17 @@ int fz_match_stext_page(fz_context *ctx, fz_stext_page *text, const char *needle
 int fz_match_stext_page_cb(fz_context *ctx, fz_stext_page *page, const char *needle, fz_match_callback_fn *cb, void *opaque, fz_search_options options);
 
 /*
+	As for fz_match_stext_page_cb, but with the addition that an
+	optional cookie can be used to abort operation. Only the
+	abort field in the cookie is currently used, but the rest of
+	the structure should be zero inited for future compatibility.
+
+	NOTE: This is an experimental interface and subject to change
+	without notice.
+*/
+int fz_match_stext_page_cb_with_cookie(fz_context *ctx, fz_stext_page *page, const char *needle, fz_match_callback_fn *cb, void *opaque, fz_search_options options, fz_cookie *cookie);
+
+/*
 	Allocator function to make a new STRUCT stext block to be used in
 	a given page (and it's 'down' structure, initially empty). Not
 	linked in to the overall page structure yet.
@@ -1150,7 +1264,7 @@ fz_stext_block *fz_new_stext_struct(fz_context *ctx, fz_stext_page *page, fz_str
 /*
 	Iterator definition. The parts of this are subject to change.
 */
-typedef struct
+typedef struct fz_stext_page_block_iterator
 {
 	fz_stext_page *page;
 	fz_stext_struct *parent;
@@ -1283,7 +1397,7 @@ fz_classify_stext_rect(fz_context *ctx, fz_stext_page *page, fz_structure classi
 int
 fz_stext_remove_page_fill(fz_context *ctx, fz_stext_page *page);
 
-typedef struct
+typedef struct fz_image_raft_options
 {
 	/* The maximum width or height that should be considered for rafting. */
 	int max_size;

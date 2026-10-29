@@ -67,17 +67,11 @@ typedef struct
 
 	int blend_bitmask;
 
-	int num_tiles;
-	int max_tiles;
-	svg_tile *tiles;
+	fz_list(svg_tile, tiles);
 
-	int num_fonts;
-	int max_fonts;
-	svg_font *fonts;
+	fz_list(svg_font, fonts);
 
-	int num_images;
-	int max_images;
-	svg_image *images;
+	fz_list(svg_image, images);
 
 	int layers;
 
@@ -478,77 +472,94 @@ svg_dev_text_span_as_paths_defs(fz_context *ctx, fz_device *dev, fz_text_span *s
 	fz_buffer *out = sdev->out;
 	int i, font_idx;
 	svg_font *fnt;
+	fz_path *path = NULL;
 
-	for (font_idx = 0; font_idx < sdev->num_fonts; font_idx++)
+	fz_var(path);
+
+	for (font_idx = 0; font_idx < sdev->fonts_len; font_idx++)
 	{
-		if (sdev->fonts[font_idx].font == span->font)
+		fnt = &sdev->fonts[font_idx];
+		if (fnt->font == span->font)
 			break;
 	}
-	if (font_idx == sdev->num_fonts)
+	if (font_idx == sdev->fonts_len)
 	{
 		/* New font */
-		if (font_idx == sdev->max_fonts)
-		{
-			int newmax = sdev->max_fonts * 2;
-			if (newmax == 0)
-				newmax = 4;
-			sdev->fonts = fz_realloc_array(ctx, sdev->fonts, newmax, svg_font);
-			memset(&sdev->fonts[font_idx], 0, (newmax - font_idx) * sizeof(svg_font));
-			sdev->max_fonts = newmax;
-		}
-		sdev->fonts[font_idx].id = sdev->id++;
-		sdev->fonts[font_idx].font = fz_keep_font(ctx, span->font);
-		sdev->num_fonts++;
+		fnt = fz_push_list(ctx, sdev->fonts);
+		fnt->id = sdev->id++;
+		fnt->font = fz_keep_font(ctx, span->font);
 	}
-	fnt = &sdev->fonts[font_idx];
 
-	for (i=0; i < span->len; i++)
+	fz_try(ctx)
 	{
-		fz_text_item *it = &span->items[i];
-		int gid = it->gid;
+		for (i=0; i < span->len; i++)
+		{
+			fz_text_item *it = &span->items[i];
+			int gid = it->gid;
 
-		if (gid < 0)
-			continue;
-		if (gid >= fnt->max_sentlist)
-		{
-			int j;
-			fnt->sentlist = fz_realloc_array(ctx, fnt->sentlist, gid+1, char);
-			for (j = fnt->max_sentlist; j <= gid; j++)
-				fnt->sentlist[j] = 0;
-			fnt->max_sentlist = gid+1;
-		}
-		if (!fnt->sentlist[gid])
-		{
-			/* Need to send this one */
-			fz_path *path;
-			out = start_def(ctx, sdev, 1);
-			if (fz_font_ft_face(ctx, span->font))
+			if (gid < 0)
+				continue;
+			if (gid >= fnt->max_sentlist)
 			{
-				path = fz_outline_glyph(ctx, span->font, gid, fz_identity);
-				if (path)
-				{
-					fz_append_printf(ctx, out, "<path id=\"font_%d_%d\"", fnt->id, gid);
-					svg_dev_path(ctx, sdev, path);
-					fz_append_printf(ctx, out, "/>\n");
-					fz_drop_path(ctx, path);
-				}
-				else
-				{
-					fz_append_printf(ctx, out, "<g id=\"font_%d_%d\"></g>\n", fnt->id, gid);
-				}
+				int j;
+				fnt->sentlist = fz_realloc_array(ctx, fnt->sentlist, gid+1, char);
+				for (j = fnt->max_sentlist; j <= gid; j++)
+					fnt->sentlist[j] = 0;
+				fnt->max_sentlist = gid+1;
 			}
-			else if (fz_font_t3_procs(ctx, span->font))
+			if (!fnt->sentlist[gid])
 			{
-				fz_append_printf(ctx, out, "<g id=\"font_%d_%d\">\n", fnt->id, gid);
-				fz_run_t3_glyph(ctx, span->font, gid, fz_identity, dev);
-				fnt = &sdev->fonts[font_idx]; /* recursion may realloc the font array! */
-				fz_append_printf(ctx, out, "</g>\n");
+				/* Need to send this one */
+				out = start_def(ctx, sdev, 1);
+				if (fz_font_ft_face(ctx, span->font))
+				{
+					path = fz_outline_glyph(ctx, span->font, gid, fz_identity);
+					if (path)
+					{
+						fz_append_printf(ctx, out, "<path id=\"font_%d_%d\"", fnt->id, gid);
+						svg_dev_path(ctx, sdev, path);
+						fz_append_printf(ctx, out, "/>\n");
+						fz_drop_path(ctx, path);
+						path = NULL;
+					}
+					else
+					{
+						fz_append_printf(ctx, out, "<g id=\"font_%d_%d\"></g>\n", fnt->id, gid);
+					}
+				}
+				else if (fz_font_t3_procs(ctx, span->font))
+				{
+					fz_append_printf(ctx, out, "<g id=\"font_%d_%d\">\n", fnt->id, gid);
+					fz_run_t3_glyph(ctx, span->font, gid, fz_identity, dev);
+					fnt = &sdev->fonts[font_idx]; /* recursion may realloc the font array! */
+					fz_append_printf(ctx, out, "</g>\n");
+				}
+				out = end_def(ctx, sdev, 1);
+				fnt->sentlist[gid] = 1;
 			}
-			out = end_def(ctx, sdev, 1);
-			fnt->sentlist[gid] = 1;
 		}
 	}
+	fz_catch(ctx)
+	{
+		fz_drop_path(ctx, path);
+		fz_rethrow(ctx);
+	}
+
 	return fnt;
+}
+
+static int is_valid_xml_char(int c)
+{
+	/* exclude C0 (except tab and newline) and C1 and surrogates */
+	return (
+		c == 0x9 ||
+		c == 0xA ||
+		c == 0xD ||
+		(c >= 0x20 && c <= 0x7E) ||
+		(c >= 0xA0 && c <= 0xD7FF) ||
+		(c >= 0xE000 && c <= 0xFFFD) ||
+		(c >= 0x10000 && c <= 0x10FFFF)
+	);
 }
 
 static void
@@ -563,8 +574,8 @@ svg_dev_data_text(fz_context *ctx, fz_buffer *out, int c)
 			fz_append_string(ctx, out, "&quot;");
 		else if (c >= 32 && c < 127 && c != '<' && c != '>')
 			fz_append_byte(ctx, out, c);
-		else if (c >= 0xD800 && c <= 0xDFFF)
-			/* no surrogate characters in SVG */
+		else if (!is_valid_xml_char(c))
+			/* no surrogate or other invalid characters in SVG */
 			fz_append_printf(ctx, out, "&#xFFFD;");
 		else
 			fz_append_printf(ctx, out, "&#x%04x;", c);
@@ -897,7 +908,9 @@ svg_send_image(fz_context *ctx, svg_device *sdev, fz_image *img, fz_color_params
 
 	if (sdev->reuse_images)
 	{
-		for (i = sdev->num_images-1; i >= 0; i--)
+		svg_image *si;
+
+		for (i = sdev->images_len-1; i >= 0; i--)
 			if (img == sdev->images[i].image)
 				break;
 		if (i >= 0)
@@ -907,25 +920,17 @@ svg_send_image(fz_context *ctx, svg_device *sdev, fz_image *img, fz_color_params
 			return;
 		}
 
-		/* We need to send this image for the first time */
-		if (sdev->num_images == sdev->max_images)
-		{
-			int new_max = sdev->max_images * 2;
-			if (new_max == 0)
-				new_max = 32;
-			sdev->images = fz_realloc_array(ctx, sdev->images, new_max, svg_image);
-			sdev->max_images = new_max;
-		}
-
 		id = sdev->id++;
 
 		fz_append_printf(ctx, out, "<image id=\"image_%d\" width=\"%d\" height=\"%d\" xlink:href=\"", id, img->w, img->h);
 		fz_append_image_as_data_uri(ctx, out, img);
 		fz_append_printf(ctx, out, "\"/>\n");
 
-		sdev->images[sdev->num_images].id = id;
-		sdev->images[sdev->num_images].image = fz_keep_image(ctx, img);
-		sdev->num_images++;
+		/* We need to send this image for the first time */
+		si = fz_push_list(ctx, sdev->images);
+
+		si->id = id;
+		si->image = fz_keep_image(ctx, img);
 	}
 	else
 	{
@@ -1211,18 +1216,9 @@ svg_dev_begin_tile(fz_context *ctx, fz_device *dev, fz_rect area, fz_rect view, 
 {
 	svg_device *sdev = (svg_device*)dev;
 	fz_buffer *out;
-	int num;
 	svg_tile *t;
 
-	if (sdev->num_tiles == sdev->max_tiles)
-	{
-		int n = (sdev->num_tiles == 0 ? 4 : sdev->num_tiles * 2);
-
-		sdev->tiles = fz_realloc_array(ctx, sdev->tiles, n, svg_tile);
-		sdev->max_tiles = n;
-	}
-	num = sdev->num_tiles++;
-	t = &sdev->tiles[num];
+	t = fz_push_list(ctx, sdev->tiles);
 	t->area = area;
 	t->view = view;
 	t->ctm = ctm;
@@ -1268,9 +1264,9 @@ svg_dev_end_tile(fz_context *ctx, fz_device *dev)
 	fz_matrix inverse;
 	float x, y, w, h;
 
-	if (sdev->num_tiles == 0)
+	if (sdev->tiles_len == 0)
 		return;
-	num = --sdev->num_tiles;
+	num = --sdev->tiles_len;
 	t = &sdev->tiles[num];
 
 	fz_append_printf(ctx, out, "</g>\n");
@@ -1395,13 +1391,13 @@ svg_dev_drop_device(fz_context *ctx, fz_device *dev)
 	fz_free(ctx, sdev->tiles);
 	fz_drop_buffer(ctx, sdev->defs);
 	fz_drop_buffer(ctx, sdev->main);
-	for (i = 0; i < sdev->num_fonts; i++)
+	for (i = 0; i < sdev->fonts_len; i++)
 	{
 		fz_drop_font(ctx, sdev->fonts[i].font);
 		fz_free(ctx, sdev->fonts[i].sentlist);
 	}
 	fz_free(ctx, sdev->fonts);
-	for (i = 0; i < sdev->num_images; i++)
+	for (i = 0; i < sdev->images_len; i++)
 	{
 		fz_drop_image(ctx, sdev->images[i].image);
 	}
@@ -1456,53 +1452,61 @@ fz_device *fz_new_svg_device_with_options(fz_context *ctx, fz_output *out, float
 {
 	svg_device *dev = fz_new_derived_device(ctx, svg_device);
 
-	dev->super.close_device = svg_dev_close_device;
-	dev->super.drop_device = svg_dev_drop_device;
+	fz_try(ctx)
+	{
+		dev->super.close_device = svg_dev_close_device;
+		dev->super.drop_device = svg_dev_drop_device;
 
-	dev->super.fill_path = svg_dev_fill_path;
-	dev->super.stroke_path = svg_dev_stroke_path;
-	dev->super.clip_path = svg_dev_clip_path;
-	dev->super.clip_stroke_path = svg_dev_clip_stroke_path;
+		dev->super.fill_path = svg_dev_fill_path;
+		dev->super.stroke_path = svg_dev_stroke_path;
+		dev->super.clip_path = svg_dev_clip_path;
+		dev->super.clip_stroke_path = svg_dev_clip_stroke_path;
 
-	dev->super.fill_text = svg_dev_fill_text;
-	dev->super.stroke_text = svg_dev_stroke_text;
-	dev->super.clip_text = svg_dev_clip_text;
-	dev->super.clip_stroke_text = svg_dev_clip_stroke_text;
-	dev->super.ignore_text = svg_dev_ignore_text;
+		dev->super.fill_text = svg_dev_fill_text;
+		dev->super.stroke_text = svg_dev_stroke_text;
+		dev->super.clip_text = svg_dev_clip_text;
+		dev->super.clip_stroke_text = svg_dev_clip_stroke_text;
+		dev->super.ignore_text = svg_dev_ignore_text;
 
-	dev->super.fill_shade = svg_dev_fill_shade;
-	dev->super.fill_image = svg_dev_fill_image;
-	dev->super.fill_image_mask = svg_dev_fill_image_mask;
-	dev->super.clip_image_mask = svg_dev_clip_image_mask;
+		dev->super.fill_shade = svg_dev_fill_shade;
+		dev->super.fill_image = svg_dev_fill_image;
+		dev->super.fill_image_mask = svg_dev_fill_image_mask;
+		dev->super.clip_image_mask = svg_dev_clip_image_mask;
 
-	dev->super.pop_clip = svg_dev_pop_clip;
+		dev->super.pop_clip = svg_dev_pop_clip;
 
-	dev->super.begin_mask = svg_dev_begin_mask;
-	dev->super.end_mask = svg_dev_end_mask;
-	dev->super.begin_group = svg_dev_begin_group;
-	dev->super.end_group = svg_dev_end_group;
+		dev->super.begin_mask = svg_dev_begin_mask;
+		dev->super.end_mask = svg_dev_end_mask;
+		dev->super.begin_group = svg_dev_begin_group;
+		dev->super.end_group = svg_dev_end_group;
 
-	dev->super.begin_tile = svg_dev_begin_tile;
-	dev->super.end_tile = svg_dev_end_tile;
+		dev->super.begin_tile = svg_dev_begin_tile;
+		dev->super.end_tile = svg_dev_end_tile;
 
-	dev->super.begin_layer = svg_dev_begin_layer;
-	dev->super.end_layer = svg_dev_end_layer;
+		dev->super.begin_layer = svg_dev_begin_layer;
+		dev->super.end_layer = svg_dev_end_layer;
 
-	dev->real_out = out;
-	dev->in_defs = 0;
-	dev->defs = fz_new_buffer(ctx, 4096);
-	dev->main = fz_new_buffer(ctx, 4096);
-	dev->out = dev->main;
+		dev->real_out = out;
+		dev->in_defs = 0;
+		dev->defs = fz_new_buffer(ctx, 4096);
+		dev->main = fz_new_buffer(ctx, 4096);
+		dev->out = dev->main;
 
-	dev->save_id = opts->id;
-	dev->id = opts->id ? *opts->id : 1;
-	dev->layers = 0;
-	dev->text_as_text = (opts->text_format == FZ_SVG_TEXT_AS_TEXT);
-	dev->reuse_images = opts->reuse_images;
-	dev->page_width = page_width;
-	dev->page_height = page_height;
+		dev->save_id = opts->id;
+		dev->id = opts->id ? *opts->id : 1;
+		dev->layers = 0;
+		dev->text_as_text = (opts->text_format == FZ_SVG_TEXT_AS_TEXT);
+		dev->reuse_images = opts->reuse_images;
+		dev->page_width = page_width;
+		dev->page_height = page_height;
 
-	dev->raster_scale = opts->resolution / 72.0f;
+		dev->raster_scale = opts->resolution / 72.0f;
+	}
+	fz_catch(ctx)
+	{
+		fz_drop_device(ctx, &dev->super);
+		fz_rethrow(ctx);
+	}
 
 	return (fz_device*)dev;
 }

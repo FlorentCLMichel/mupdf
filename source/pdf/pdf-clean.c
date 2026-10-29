@@ -105,6 +105,24 @@ pdf_filter_resources(fz_context *ctx, pdf_document *doc, pdf_obj *in_res, pdf_ob
 		n = pdf_dict_len(ctx, obj);
 		for (i = 0; i < n; i++)
 		{
+			/* Type 3 fonts can have resources in. They can be inherited from the
+			 * page they are in, and when we filter the type3 we insert them
+			 * locally. This can produce a circular reference within the object.
+			 * To avoid this, we ensure here that all Type3 font are themselves
+			 * in the form of a reference.
+			 */
+			pdf_obj *font = pdf_dict_get_val(ctx, obj, i);
+			if (font && !pdf_is_indirect(ctx, font) && pdf_dict_get(ctx, font, PDF_NAME(Subtype)) == PDF_NAME(Type3))
+			{
+				pdf_obj *name = pdf_dict_get_key(ctx, obj, i);
+				int fontobjnum = pdf_create_object(ctx, doc);
+				pdf_update_object(ctx, doc, fontobjnum, font);
+				pdf_dict_put_indirect(ctx, obj, name, fontobjnum);
+				i = 0; /* Restart the loop as pdf_dict_put_drop might have caused the ordering to change. */
+			}
+		}
+		for (i = 0; i < n; i++)
+		{
 			pdf_obj *font = pdf_dict_get_val(ctx, obj, i);
 			if (font && pdf_dict_get(ctx, font, PDF_NAME(Subtype)) == PDF_NAME(Type3))
 			{
@@ -1234,14 +1252,14 @@ static int clip_culler(fz_context *ctx, void *opaque, fz_rect bbox, fz_cull_type
 	case FZ_CULL_GLYPH:
 	case FZ_CULL_IMAGE:
 	case FZ_CULL_SHADING:
-		return (fz_is_empty_rect(fz_intersect_rect(bbox, hc->clip)));
+		return fz_is_empty_rect(fz_intersect_rect(bbox, hc->clip));
 	default:
 		return 0;
 	}
 }
 
 static
-void init_clip_filter(fz_context *ctx, struct clip_filter_state *hc, pdf_page *page, fz_rect *clip)
+void init_clip_filter(fz_context *ctx, struct clip_filter_state *hc, pdf_page *page, fz_rect clip)
 {
 	memset(&hc->filter_opts, 0, sizeof hc->filter_opts);
 	memset(&hc->sanitize_opts, 0, sizeof hc->sanitize_opts);
@@ -1251,7 +1269,7 @@ void init_clip_filter(fz_context *ctx, struct clip_filter_state *hc, pdf_page *p
 	hc->filter_opts.ascii = 0;
 	hc->filter_opts.opaque = hc;
 	hc->filter_opts.filters = hc->filter_list;
-	hc->clip = *clip;
+	hc->clip = clip;
 
 	hc->sanitize_opts.opaque = hc;
 	hc->sanitize_opts.culler = clip_culler;
@@ -1312,15 +1330,20 @@ restart:
 }
 
 void
-pdf_clip_page(fz_context *ctx, pdf_page *page, fz_rect *clip)
+pdf_clip_page(fz_context *ctx, pdf_page *page, fz_rect clip)
 {
 	pdf_document *doc;
 	struct clip_filter_state hc;
+	fz_matrix page_ctm, inv_page_ctm;
 
 	if (page == NULL)
 		return;
 
 	doc = page->doc;
+
+	pdf_page_transform(ctx, page, NULL, &page_ctm);
+	inv_page_ctm = fz_invert_matrix(page_ctm);
+	clip = fz_transform_rect(clip, inv_page_ctm);
 
 	init_clip_filter(ctx, &hc, page, clip);
 

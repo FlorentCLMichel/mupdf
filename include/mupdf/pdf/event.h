@@ -37,7 +37,7 @@ struct pdf_doc_event
 	int type;
 };
 
-enum
+enum pdf_document_event_type
 {
 	PDF_DOCUMENT_EVENT_ALERT,
 	PDF_DOCUMENT_EVENT_PRINT,
@@ -68,7 +68,7 @@ void *pdf_get_doc_event_callback_data(fz_context *ctx, pdf_document *doc);
 	before returning from the callback. "finally_checked" need be set
 	only if "check_box_message" is non-NULL.
 */
-typedef struct
+typedef struct pdf_alert_event
 {
 	pdf_document *doc;
 	const char *message;
@@ -83,7 +83,7 @@ typedef struct
 } pdf_alert_event;
 
 /* Possible values of icon_type */
-enum
+enum pdf_alert_icon_type
 {
 	PDF_ALERT_ICON_ERROR,
 	PDF_ALERT_ICON_WARNING,
@@ -92,7 +92,7 @@ enum
 };
 
 /* Possible values of button_group_type */
-enum
+enum pdf_alert_button_group_type
 {
 	PDF_ALERT_BUTTON_GROUP_OK,
 	PDF_ALERT_BUTTON_GROUP_OK_CANCEL,
@@ -101,7 +101,7 @@ enum
 };
 
 /* Possible values of button_pressed */
-enum
+enum pdf_alert_button_pressed
 {
 	PDF_ALERT_BUTTON_NONE,
 	PDF_ALERT_BUTTON_OK,
@@ -111,7 +111,7 @@ enum
 };
 
 /*
-	access the details of an alert event
+	Access the details of an alert event.
 	The returned pointer and all the data referred to by the
 	structure are owned by mupdf and need not be freed by the
 	caller.
@@ -119,34 +119,33 @@ enum
 pdf_alert_event *pdf_access_alert_event(fz_context *ctx, pdf_doc_event *evt);
 
 /*
-	access the details of am execMenuItem
-	event, which consists of just the name of the menu item
+	Access the details of am execMenuItem event, which consists of just the name of the menu item.
 */
 const char *pdf_access_exec_menu_item_event(fz_context *ctx, pdf_doc_event *evt);
 
 /*
-	details of a launch-url event. The app should
+	Details of a launch-url event. The app should
 	open the url, either in a new frame or in the current window.
 */
-typedef struct
+typedef struct pdf_launch_url_event
 {
 	const char *url;
 	int new_frame;
 } pdf_launch_url_event;
 
 /*
-	access the details of a launch-url
+	Access the details of a launch-url
 	event. The returned pointer and all data referred to by the structure
 	are owned by mupdf and need not be freed by the caller.
 */
 pdf_launch_url_event *pdf_access_launch_url_event(fz_context *ctx, pdf_doc_event *evt);
 
 /*
-	details of a mail_doc event. The app should save
+	Details of a mail_doc event. The app should save
 	the current state of the document and email it using the specified
 	parameters.
 */
-typedef struct
+typedef struct pdf_mail_doc_event
 {
 	int ask_user;
 	const char *to;

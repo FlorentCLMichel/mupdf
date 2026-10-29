@@ -91,7 +91,7 @@ fz_stext_page *fz_new_stext_page_from_display_list(fz_context *ctx, fz_display_l
 /**
 	Convert structured text into plain text.
 */
-typedef enum
+typedef enum fz_text_flatten
 {
 	/* ALL: Flatten the text completely. All gaps between words/
 	 * paragraphs/lines are expressed as a single space. */
@@ -188,6 +188,13 @@ void fz_write_image_as_data_uri(fz_context *ctx, fz_output *out, fz_image *image
 void fz_write_pixmap_as_data_uri(fz_context *ctx, fz_output *out, fz_pixmap *pixmap);
 void fz_append_image_as_data_uri(fz_context *ctx, fz_buffer *out, fz_image *image);
 void fz_append_pixmap_as_data_uri(fz_context *ctx, fz_buffer *out, fz_pixmap *pixmap);
+
+/**
+	Decode a `data:` URL of the specified media-type.
+
+	Returns NULL if the data is of a different media-type.
+*/
+fz_buffer *fz_parse_data_uri_with_media_type(fz_context *ctx, const char *uri, const char *accept_mimetype);
 
 /**
 	Use text extraction to convert the input document into XHTML,

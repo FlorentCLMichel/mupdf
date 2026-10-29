@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -552,7 +552,7 @@ pcl_header(fz_context *ctx, fz_output *out, fz_pcl_options *pcl, int num_copies,
 	pcl->page_count++;
 }
 
-typedef struct pcl_papersize_s
+typedef struct pcl_papersize
 {
 	int code;
 	const char *text;
@@ -777,7 +777,7 @@ fz_write_pixmap_as_pcl(fz_context *ctx, fz_output *out, const fz_pixmap *pixmap,
 		fz_rethrow(ctx);
 }
 
-typedef struct color_pcl_band_writer_s
+typedef struct color_pcl_band_writer
 {
 	fz_band_writer super;
 	fz_pcl_options options;
@@ -1180,7 +1180,7 @@ fz_write_bitmap_as_pcl(fz_context *ctx, fz_output *out, const fz_bitmap *bitmap,
 		fz_rethrow(ctx);
 }
 
-typedef struct mono_pcl_band_writer_s
+typedef struct mono_pcl_band_writer
 {
 	fz_band_writer super;
 	fz_pcl_options options;
@@ -1564,9 +1564,10 @@ fz_new_pcl_writer_with_output(fz_context *ctx, fz_output *out, const char *optio
 		wri->out = out;
 		fz_throw_on_unused_options(ctx, options, "pcl");
 	}
+	fz_always(ctx)
+		fz_drop_options(ctx, options);
 	fz_catch(ctx)
 	{
-		fz_drop_options(ctx, options);
 		fz_drop_output(ctx, out);
 		fz_free(ctx, wri);
 		fz_rethrow(ctx);

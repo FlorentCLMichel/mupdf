@@ -368,9 +368,9 @@ static const char *postfix_js =
 	"}\n"
 	"\n"
 	"mupdf.Rect = {\n"
-	"	empty: [ 0x80000000, 0x80000000, 0x7fffff80, 0x7fffff80 ],\n"
+	"	empty: [ 0x7fffff80, 0x7fffff80, -1 << 31, -1 << 31 ],\n"
 	"	invalid: [ 0, 0, -1, -1 ],\n"
-	"	infinite: [ 0x7fffff80, 0x7fffff80, 0x80000000, 0x80000000 ],\n"
+	"	infinite: [ -1 << 31, -1 << 31, 0x7fffff80, 0x7fffff80 ],\n"
 	"	isEmpty: function (rect) {\n"
 	"		return rect[0] >= rect[2] || rect[1] >= rect[3]\n"
 	"	},\n"
@@ -379,10 +379,10 @@ static const char *postfix_js =
 	"	},\n"
 	"	isInfinite: function (rect) {\n"
 	"		return (\n"
-	"			rect[0] === 0x7fffff80 &&\n"
-	"			rect[1] === 0x7fffff80 &&\n"
-	"			rect[2] === 0x80000000 &&\n"
-	"			rect[3] === 0x80000000\n"
+	"			rect[0] <= -1 << 31 &&\n"
+	"			rect[1] <= -1 << 31 &&\n"
+	"			rect[2] >= 0x7fffff80 &&\n"
+	"			rect[3] >= 0x7fffff80\n"
 	"		)\n"
 	"	},\n"
 	"	transform: function (rect, matrix) {\n"
@@ -417,9 +417,9 @@ static const char *postfix_js =
 	"		return p[0] >= r[0] && p[0] < r[1] && p[1] >= r[2] && p[1] < r[3]\n"
 	"	},\n"
 	"	rectFromQuad: function (q) {\n"
-	"		if (!Quad.isValid(r))\n"
+	"		if (!Quad.isValid(q))\n"
 	"			return Rect.invalid\n"
-	"		if (Quad.isInfinite(r))\n"
+	"		if (Quad.isInfinite(q))\n"
 	"			return Rect.infinite\n"
 	"		return [\n"
 	"			Math.min(q[0], q[2], q[4], q[6]),\n"
@@ -1548,6 +1548,24 @@ static void ffi_pushimage_own(js_State *J, fz_image *image)
 {
 	js_getregistry(J, "fz_image");
 	js_newuserdata(J, "fz_image", image, ffi_gc_fz_image);
+}
+
+static const char *ffi_tooptions(js_State *J, int idx)
+{
+	// convert object to option string (with JSON syntax) if necessary
+	if (!js_iscoercible(J, idx))
+		return NULL;
+	if (!js_isstring(J, idx))
+	{
+		js_getglobal(J, "JSON");
+		js_getproperty(J, -1, "stringify");
+		js_rot2pop1(J);
+		js_pushnull(J);
+		js_copy(J, (idx < 0) ? idx-2 : idx);
+		js_call(J, 1);
+		js_replace(J, (idx < 0) ? idx-1 : idx);
+	}
+	return js_tostring(J, idx);
 }
 
 static int is_number(const char *key, int *idx)
@@ -2871,12 +2889,13 @@ static void js_proc_k(fz_context *ctx, pdf_processor *proc, float c, float m, fl
 	PROC_END(4);
 }
 
-static void js_proc_BI(fz_context *ctx, pdf_processor *proc, fz_image *img, const char *colorspace)
+static void js_proc_BI(fz_context *ctx, pdf_processor *proc, fz_image *img, const char *colorspace, int cs_is_inline)
 {
 	PROC_BEGIN("op_BI");
 	ffi_pushimage(J, img);
 	js_pushstring(J, colorspace);
-	PROC_END(2);
+	js_pushboolean(J, cs_is_inline);
+	PROC_END(3);
 }
 
 static void js_proc_sh(fz_context *ctx, pdf_processor *proc, const char *name, fz_shade *shade)
@@ -4244,7 +4263,7 @@ static void ffi_Document_resolveLink(js_State *J)
 
 	if (js_isuserdata(J, 1, "fz_link"))
 	{
-		fz_link *link = js_touserdata(J, 0, "fz_link");
+		fz_link *link = js_touserdata(J, 1, "fz_link");
 		uri = link->uri;
 	}
 	else
@@ -4267,7 +4286,7 @@ static void ffi_Document_resolveLinkDestination(js_State *J)
 
 	if (js_isuserdata(J, 1, "fz_link"))
 	{
-		fz_link *link = js_touserdata(J, 0, "fz_link");
+		fz_link *link = js_touserdata(J, 1, "fz_link");
 		uri = link->uri;
 	}
 	else
@@ -4644,7 +4663,7 @@ static void ffi_Page_toStructuredText(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
 	fz_page *page = ffi_topage(J, 0);
-	const char *options = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
+	const char *options = ffi_tooptions(J, 1);
 	fz_stext_options so;
 	fz_stext_page *text = NULL;
 
@@ -4703,14 +4722,15 @@ static void ffi_Page_search(js_State *J)
 
 	if (js_isnumber(J, 2))
 		options = js_tonumber(J, 2);
-	else if (js_isstring(J, 2))
+	else if (js_isundefined(J, 2))
+		options = FZ_SEARCH_IGNORE_CASE;
+	else
 	{
 		fz_init_search_options(ctx, &options);
-		fz_parse_search_options(ctx, &options, js_tostring(J, 2));
+		fz_parse_search_options(ctx, &options, ffi_tooptions(J, 2));
 	}
-	else
-		options = FZ_SEARCH_IGNORE_CASE;
 
+	state.max_hits = js_iscoercible(J, 3) ? js_tointeger(J, 3) : 500;
 	js_newarray(J);
 
 	fz_try(ctx)
@@ -5243,11 +5263,11 @@ static void ffi_Pixmap_asJPEG(js_State *J)
 	fz_context *ctx = js_getcontext(J);
 	fz_pixmap *pixmap = ffi_topixmap(J, 0);
 	int quality = js_isdefined(J, 1) ? js_tointeger(J, 1) : 90;
-	int invert_cmyk = js_isdefined(J, 1) ? js_toboolean(J, 1) : 0;
+	int cmyk_method = js_isdefined(J, 1) ? js_tonumber(J, 1) : 2;
 	fz_buffer *buf = NULL;
 
 	fz_try(ctx)
-		buf = fz_new_buffer_from_pixmap_as_jpeg(ctx, pixmap, fz_default_color_params, quality, invert_cmyk);
+		buf = fz_new_buffer_from_pixmap_as_jpeg(ctx, pixmap, fz_default_color_params, quality, cmyk_method);
 	fz_catch(ctx)
 		rethrow(J);
 
@@ -6308,7 +6328,7 @@ static void ffi_DisplayList_toStructuredText(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
 	fz_display_list *list = js_touserdata(J, 0, "fz_display_list");
-	const char *options = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
+	const char *options = ffi_tooptions(J, 1);
 	fz_stext_options so;
 	fz_stext_page *text = NULL;
 
@@ -6333,14 +6353,15 @@ static void ffi_DisplayList_search(js_State *J)
 
 	if (js_isnumber(J, 2))
 		options = js_tonumber(J, 2);
-	else if (js_isstring(J, 2))
+	else if (js_isundefined(J, 2))
+		options = FZ_SEARCH_IGNORE_CASE;
+	else
 	{
 		fz_init_search_options(ctx, &options);
-		fz_parse_search_options(ctx, &options, js_tostring(J, 2));
+		fz_parse_search_options(ctx, &options, ffi_tooptions(J, 2));
 	}
-	else
-		options = FZ_SEARCH_IGNORE_CASE;
 
+	state.max_hits = js_iscoercible(J, 3) ? js_tointeger(J, 3) : 500;
 	js_newarray(J);
 
 	fz_try(ctx)
@@ -6520,13 +6541,13 @@ static void ffi_StructuredText_search(js_State *J)
 
 	if (js_isnumber(J, 2))
 		options = js_tonumber(J, 2);
-	else if (js_isstring(J, 2))
+	else if (js_isundefined(J, 2))
+		options = FZ_SEARCH_IGNORE_CASE;
+	else
 	{
 		fz_init_search_options(ctx, &options);
-		fz_parse_search_options(ctx, &options, js_tostring(J, 2));
+		fz_parse_search_options(ctx, &options, ffi_tooptions(J, 2));
 	}
-	else
-		options = FZ_SEARCH_IGNORE_CASE;
 
 	state.max_hits = js_iscoercible(J, 3) ? js_tointeger(J, 3) : 500;
 	js_newarray(J);
@@ -6914,7 +6935,7 @@ static void ffi_new_DocumentWriter(js_State *J)
 	fz_context *ctx = js_getcontext(J);
 	const char *filename = NULL;
 	const char *format = js_iscoercible(J, 2) ? js_tostring(J, 2) : NULL;
-	const char *options = js_iscoercible(J, 3) ? js_tostring(J, 3) : NULL;
+	const char *options = ffi_tooptions(J, 3);
 	fz_document_writer *wri = NULL;
 	fz_buffer *buf = NULL;
 
@@ -7752,6 +7773,8 @@ static void ffi_PDFDocument_addEmbeddedFile(js_State *J)
 	if (created >= 0) created /= 1000;
 	if (modified >= 0) modified /= 1000;
 
+	fz_var(ind);
+
 	fz_try(ctx)
 		ind = pdf_add_embedded_file(ctx, pdf, filename, mimetype, contents,
 			created, modified, add_checksum);
@@ -8111,7 +8134,7 @@ static void ffi_PDFDocument_save(js_State *J)
 	fz_context *ctx = js_getcontext(J);
 	pdf_document *pdf = js_touserdata(J, 0, "pdf_document");
 	const char *filename = js_tostring(J, 1);
-	const char *options = js_iscoercible(J, 2) ? js_tostring(J, 2) : NULL;
+	const char *options = ffi_tooptions(J, 2);
 	pdf_write_options pwo;
 
 	fz_try(ctx) {
@@ -8125,7 +8148,7 @@ static void ffi_PDFDocument_saveToBuffer(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
 	pdf_document *pdf = js_touserdata(J, 0, "pdf_document");
-	const char *options = js_iscoercible(J, 1) ? js_tostring(J, 1) : NULL;
+	const char *options = ffi_tooptions(J, 1);
 	pdf_write_options pwo;
 	fz_buffer *buf = NULL;
 	fz_output *out = NULL;
@@ -9832,10 +9855,10 @@ static void ffi_PDFPage_associatedFile(js_State *J)
 static void ffi_PDFPage_clip(js_State *J)
 {
 	fz_context *ctx = js_getcontext(J);
-	pdf_page *pdf = js_touserdata(J, 0, "pdf_page");
+	pdf_page *page = js_touserdata(J, 0, "pdf_page");
 	fz_rect rect = ffi_torect(J, 1);
 	fz_try(ctx)
-		pdf_clip_page(ctx, pdf, &rect);
+		pdf_clip_page(ctx, page, rect);
 	fz_catch(ctx)
 		rethrow(J);
 }
@@ -12525,7 +12548,7 @@ int murun_main(int argc, char **argv)
 		jsB_propfun(J, "Page.toPixmap", ffi_Page_toPixmap, 4);
 		jsB_propfun(J, "Page.toDisplayList", ffi_Page_toDisplayList, 1);
 		jsB_propfun(J, "Page.toStructuredText", ffi_Page_toStructuredText, 1);
-		jsB_propfun(J, "Page.search", ffi_Page_search, 2);
+		jsB_propfun(J, "Page.search", ffi_Page_search, 3);
 		jsB_propfun(J, "Page.getLinks", ffi_Page_getLinks, 0);
 		jsB_propfun(J, "Page.createLink", ffi_Page_createLink, 2);
 		jsB_propfun(J, "Page.deleteLink", ffi_Page_deleteLink, 1);
@@ -12710,7 +12733,7 @@ int murun_main(int argc, char **argv)
 		jsB_propfun(J, "DisplayList.getBounds", ffi_DisplayList_getBounds, 0);
 		jsB_propfun(J, "DisplayList.toPixmap", ffi_DisplayList_toPixmap, 3);
 		jsB_propfun(J, "DisplayList.toStructuredText", ffi_DisplayList_toStructuredText, 1);
-		jsB_propfun(J, "DisplayList.search", ffi_DisplayList_search, 2);
+		jsB_propfun(J, "DisplayList.search", ffi_DisplayList_search, 3);
 		jsB_propfun(J, "DisplayList.decodeBarcode", ffi_DisplayList_decodeBarcode, 2);
 	}
 	js_setregistry(J, "fz_display_list");

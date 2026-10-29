@@ -22,6 +22,7 @@
 
 #include "mupdf/fitz.h"
 #include "mupdf/pdf.h"
+#include "pdf-imp.h"
 
 #include <string.h>
 
@@ -294,6 +295,7 @@ static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int coun
 	fz_var(page_object_nums);
 	fz_var(kids);
 	fz_var(marks);
+	fz_var(olddests);
 
 	fz_try(ctx)
 	{
@@ -360,6 +362,7 @@ static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int coun
 			}
 
 			pdf_drop_obj(ctx, olddests);
+			olddests = NULL;
 		}
 
 		/* Edit each pages /Annot list to remove any links that point to nowhere. */
@@ -415,8 +418,7 @@ static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int coun
 		{
 			pdf_obj *f = pdf_array_get(ctx, allfields, i);
 
-			while (pdf_dict_get(ctx, f, PDF_NAME(Parent)))
-				f = pdf_dict_get(ctx, f, PDF_NAME(Parent));
+			f = pdf_parent_root(ctx, f, NULL);
 
 			strip_stale_annot_refs(ctx, f, pagecount, page_object_nums);
 		}
@@ -445,6 +447,7 @@ static void pdf_rearrange_pages_imp(fz_context *ctx, pdf_document *doc, int coun
 		pdf_drop_obj(ctx, root);
 		pdf_drop_obj(ctx, kids);
 		pdf_drop_obj(ctx, structparents);
+		pdf_drop_obj(ctx, olddests);
 	}
 	fz_catch(ctx)
 	{
@@ -538,7 +541,7 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 	pdf_clean_options default_opts = { 0 };
 	pdf_document *pdf = NULL;
 	int *pages = NULL;
-	int cap, len, page;
+	int pages_cap, pages_len, page;
 
 	fz_var(pdf);
 	fz_var(pages);
@@ -550,7 +553,7 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 
 	fz_try(ctx)
 	{
-		pdf = pdf_open_document(ctx, infile);
+		pdf = pdf_open_document_with_dir(ctx, infile, opts->dir);
 		if (pdf_needs_password(ctx, pdf))
 			if (!pdf_authenticate_password(ctx, pdf, password))
 				fz_throw(ctx, FZ_ERROR_ARGUMENT, "cannot authenticate password: %s", infile);
@@ -560,7 +563,7 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 		 * start to apply any edits (which would be lost if a repair is triggered). */
 		pdf_check_document(ctx, pdf);
 
-		len = cap = 0;
+		pages_len = pages_cap = 0;
 
 		/* Only retain the specified subset of the pages */
 		if (argc)
@@ -576,27 +579,20 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 				while ((pagelist = fz_parse_page_range(ctx, pagelist, &spage, &epage, pagecount)))
 				{
 					int rangelen = (abs(epage - spage) + 1);
-					if (len + rangelen >= cap)
-					{
-						int n = cap ? cap * 2 : 8;
-						while (len + rangelen >= n)
-							n *= 2;
-						pages = fz_realloc_array(ctx, pages, n, int);
-						cap = n;
-					}
+					int *page_arr = fz_extend_list(ctx, pages, rangelen);
 
 					if (spage < epage)
 						for (page = spage; page <= epage; ++page)
-							pages[len++] = page - 1;
+							*page_arr++ = page - 1;
 					else
 						for (page = spage; page >= epage; --page)
-							pages[len++] = page - 1;
+							*page_arr++ = page - 1;
 				}
 
 				argidx++;
 			}
 
-			pdf_rearrange_pages(ctx, pdf, len, pages, opts->structure);
+			pdf_rearrange_pages(ctx, pdf, pages_len, pages, opts->structure);
 		}
 
 		/* Although the API supports passing a page list here, we don't
@@ -607,7 +603,7 @@ void pdf_clean_file(fz_context *ctx, char *infile, char *outfile, char *password
 		pdf_rewrite_images(ctx, pdf, &opts->image);
 
 		if (opts->subset_fonts)
-			pdf_subset_fonts(ctx, pdf, len, pages);
+			pdf_subset_fonts(ctx, pdf, pages_len, pages);
 
 		pdf_save_document(ctx, pdf, outfile, &opts->write);
 	}

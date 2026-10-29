@@ -6,7 +6,10 @@ import inspect
 import io
 import os
 import re
+import sys
 import textwrap
+
+import pipcl
 
 import jlib
 
@@ -738,7 +741,7 @@ def build_swig(
                 {
                     message += "Traceback (from traceback.format_tb()):\\n";
                     PyObject* traceback_dict = PyModule_GetDict(traceback);
-                    PyObject* format_tb = PyDict_GetItem(traceback_dict, PyString_FromString("format_tb"));
+                    PyObject* format_tb = PyDict_GetItem(traceback_dict, PyUnicode_FromString("format_tb"));
                     PyObject* ret = PyObject_CallFunctionObjArgs(format_tb, trace, NULL);
                     PyObject* iter = PyObject_GetIter(ret);
                     for(;;)
@@ -814,10 +817,13 @@ def build_swig(
     # namespace mudf.
     for fnname in generated.c_functions:
         if fnname in (
-                    'pdf_annot_type',
-                    'pdf_widget_type',
-                    'pdf_zugferd_profile',
-                    ):
+		'fz_colorspace_type',
+		'pdf_annot_flags',
+		'pdf_annot_type',
+		'pdf_field_flags',
+		'pdf_widget_type',
+		'pdf_zugferd_profile',
+	):
             # These are also enums which we don't want to ignore. SWIGing the
             # functions is hopefully harmless.
             pass
@@ -1919,12 +1925,15 @@ def build_swig(
             dllimport = 'mupdfcsharp.dll'
 
         # See https://www.swig.org/Doc4.2/CSharp.html `23.3.1 Primitive types`
-        # for description of SWIGWORDSIZE64. If we were to build on 32-bit Linux
-        # we would have to remove the `-DSWIGWORDSIZE64` flag.
+        # for description of SWIGWORDSIZE64.
+        SWIGWORDSIZE = ''
+        if state_.linux:
+            bits = int.bit_length(sys.maxsize+1)
+            SWIGWORDSIZE = f'-DSWIGWORDSIZE{bits}'
         command = (f'''
                 "{swig_command}"
                     {"-D_WIN32" if state_.windows else ""}
-                    {"-DSWIGWORDSIZE64" if state_.linux else ""}
+                    {SWIGWORDSIZE}
                     -c++
                     -csharp
                     -Wextra
@@ -2083,8 +2092,7 @@ def test_swig_csharp_internal(name, code_i, code_test, x32):
     # Compile/link {name}.cpp to create {name}.dll.
     #
     if state.state_.windows:
-        import wdev
-        vs = wdev.WindowsVS(cpu = wdev.WindowsCpu('x32') if x32 else None)
+        vs = pipcl.wdev.WindowsVS(cpu = pipcl.wdev.WindowsCpu('x32') if x32 else None)
         jlib.system(
                 f'''
                 cd {build_dir} && "{vs.vcvars}"&&"{vs.cl}"

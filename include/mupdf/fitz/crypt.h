@@ -25,13 +25,29 @@
 
 #include "mupdf/fitz/system.h"
 
-/* md5 digests */
+/**
+	## CRC-32 checksums
+
+	These can be called sequentially to compute the checksum
+	over separate chunks of data, by passing the return value from one to the next.
+	Pass 0 as the starting value.
+*/
+
+/* CRC-32/ISO-HDLC checksum */
+uint32_t fz_crc32(uint32_t sum, const void *data, size_t n);
+
+/* CRC-32/ISCSI checksum (aka CRC32-Castagnoli) */
+uint32_t fz_crc32c(uint32_t sum, const void *data, size_t n);
+
+/*
+	## MD5 digests
+*/
 
 /**
 	Structure definition is public to enable stack
 	based allocation. Do not access the members directly.
 */
-typedef struct
+typedef struct fz_md5
 {
 	uint32_t lo, hi;
 	uint32_t a, b, c, d;
@@ -71,13 +87,15 @@ void fz_md5_update_int64(fz_md5 *state, int64_t i);
 */
 void fz_md5_final(fz_md5 *state, unsigned char digest[16]);
 
-/* sha-256 digests */
+/*
+	## SHA-256 digests
+*/
 
 /**
 	Structure definition is public to enable stack
 	based allocation. Do not access the members directly.
 */
-typedef struct
+typedef struct fz_sha256
 {
 	unsigned int state[8];
 	unsigned int count[2];
@@ -112,13 +130,15 @@ void fz_sha256_update(fz_sha256 *state, const unsigned char *input, size_t inlen
 */
 void fz_sha256_final(fz_sha256 *state, unsigned char digest[32]);
 
-/* sha-512 digests */
+/*
+	## SHA-512 digests
+*/
 
 /**
 	Structure definition is public to enable stack
 	based allocation. Do not access the members directly.
 */
-typedef struct
+typedef struct fz_sha512
 {
 	uint64_t state[8];
 	unsigned int count[2];
@@ -153,7 +173,9 @@ void fz_sha512_update(fz_sha512 *state, const unsigned char *input, size_t inlen
 */
 void fz_sha512_final(fz_sha512 *state, unsigned char digest[64]);
 
-/* sha-384 digests */
+/*
+	## SHA-384 digests
+*/
 
 typedef fz_sha512 fz_sha384;
 
@@ -182,13 +204,15 @@ void fz_sha384_update(fz_sha384 *state, const unsigned char *input, size_t inlen
 */
 void fz_sha384_final(fz_sha384 *state, unsigned char digest[64]);
 
-/* arc4 crypto */
+/*
+	## RC4 crypto
+*/
 
 /**
 	Structure definition is public to enable stack
 	based allocation. Do not access the members directly.
 */
-typedef struct
+typedef struct fz_arc4
 {
 	unsigned x;
 	unsigned y;
@@ -218,13 +242,15 @@ void fz_arc4_encrypt(fz_arc4 *state, unsigned char *dest, const unsigned char *s
 */
 void fz_arc4_final(fz_arc4 *state);
 
-/* AES block cipher implementation from XYSSL */
+/*
+	## AES block cipher implementation from XYSSL
+*/
 
 /**
 	Structure definitions are public to enable stack
 	based allocation. Do not access the members directly.
 */
-typedef struct
+typedef struct fz_aes
 {
 	int nr; /* number of rounds */
 	uint32_t *rk; /* AES round keys */
@@ -262,9 +288,26 @@ int fz_aes_setkey_dec(fz_aes *ctx, const unsigned char *key, int keysize);
 
 	Never throws an exception.
 */
-void fz_aes_crypt_cbc(fz_aes *ctx, int mode, size_t length,
+void fz_aes_crypt_cbc(
+	fz_aes *ctx,
+	int mode,
+	size_t length,
 	unsigned char iv[16],
 	const unsigned char *input,
-	unsigned char *output );
+	unsigned char *output
+);
+
+/* ## ChaCha20 stream cipher (RFC 7539) */
+
+/* The ChaCha20 state is a vector of sixteen 32-bit words. Word 12 is the block counter. */
+typedef struct fz_chacha20 {
+	uint32_t s[16];
+} fz_chacha20;
+
+/* Setup ChaCha20 stream cipher with 256-bit key, 96-bit nonce, and counter. */
+void fz_chacha20_init(fz_chacha20 *stm, unsigned char *key, unsigned char *nonce, uint32_t counter);
+
+/* Encrypt bytes with ChaCha20 stream cipher. */
+void fz_chacha20_encrypt(fz_chacha20 *seed, unsigned char *dst, const unsigned char *src, uint32_t size);
 
 #endif

@@ -8,6 +8,8 @@ import platform
 import re
 import sys
 
+import pipcl
+
 import jlib
 
 from . import parse
@@ -84,6 +86,14 @@ class State:
         # Maps from <tu> to dict of fnname: cursor.
         self.functions_cache = dict()
 
+        # Maps from <tu> to dict of fnname: cursor for all functions that we
+        # explicitly omit from the c++ bindings, e.g. fz_argv_from_wargv().
+        self.functions_omit_cache = dict()
+
+        # Maps from <tu> to dict of fnname: cursor for all functions that
+        # we omit from the c++ bindings because of their prefix.
+        self.functions_omit_prefix_cache = dict()
+
         # Maps from <tu> to dict of dataname: cursor.
         self.global_data = dict()
 
@@ -99,6 +109,8 @@ class State:
         if tu in self.functions_cache:
             return
         fns = dict()
+        fns_omit = dict()
+        fns_omit_prefix = dict()
         global_data = dict()
         enums = dict()
         structs = dict()
@@ -125,10 +137,12 @@ class State:
                     jlib.log( 'Looking at {fnname=}')
                 if fnname in omit_fns:
                     jlib.log1('{fnname=} is in omit_fns')
+                    fns_omit[fnname] = cursor
                 else:
                     for omit_fn_prefix in omit_fns_prefixes:
                         if fnname.startswith(omit_fn_prefix):
                             jlib.log1('{fnname=} matches {omit_fn_prefix=}.')
+                            fns_omit_prefix[fnname] = cursor
                             break
                     else:
                         fns[ fnname] = cursor
@@ -138,22 +152,31 @@ class State:
                 global_data[ cursor.spelling] = cursor
 
         self.functions_cache[ tu] = fns
+        self.functions_omit_cache[ tu] = fns_omit
+        self.functions_omit_prefix_cache[ tu] = fns_omit_prefix
         self.global_data[ tu] = global_data
         self.enums[ tu] = enums
         self.structs[ tu] = structs
         jlib.log1('Have populated fns and global_data. {len(enums)=} {len(self.structs)} {len(fns)=}')
 
-    def find_functions_starting_with( self, tu, name_prefix, method):
+    def find_functions_starting_with( self, tu, name_prefix, method, include_omits=False):
         '''
         Yields (name, cursor) for all functions in <tu> whose names start with
         <name_prefix>.
 
         method:
             If true, we omit names that are in omit_methods
+        include_omits:
+            If true we include names that are in omit_fns, e.g. fz_argv_from_wargv.
         '''
         self.functions_cache_populate( tu)
-        fn_to_cursor = self.functions_cache[ tu]
-        for fnname, cursor in fn_to_cursor.items():
+        def getfns():
+            for i in self.functions_cache[ tu].items():
+                yield i
+            if include_omits:
+                for i in self.functions_omit_cache[ tu].items():
+                    yield i
+        for fnname, cursor in getfns():
             verbose = state_.show_details( fnname)
             if method and fnname in omit_methods:
                 if verbose:
@@ -198,48 +221,6 @@ def abspath(path):
     return ret
 
 
-class Cpu:
-    '''
-    For Windows only. Paths and names that depend on cpu.
-
-    Members:
-        .bits
-            .
-        .name:
-            'x32' or 'x64'.
-        .windows_subdir
-            '' or 'x64/', e.g. platform/win32/x64/Release.
-        .windows_name
-            'x86' or 'x64'.
-        .windows_config
-            'x64' or 'Win32', e.g. /Build Release|x64
-        .windows_suffix
-            '64' or '', e.g. mupdfcpp64.dll
-    '''
-    def __init__(self, name=None):
-        if name is None:
-            name = cpu_name()
-        self.name = name
-        if name == 'x32':
-            self.bits = 32
-            self.windows_subdir = ''
-            self.windows_name = 'x86'
-            self.windows_config = 'Win32'
-            self.windows_suffix = ''
-        elif name == 'x64':
-            self.bits = 64
-            self.windows_subdir = 'x64/'
-            self.windows_name = 'x64'
-            self.windows_config = 'x64'
-            self.windows_suffix = '64'
-        else:
-            assert 0, f'Unrecognised cpu name: {name}'
-
-    def __str__(self):
-        return self.name
-    def __repr__(self):
-        return f'Cpu:{self.name}'
-
 def python_version():
     '''
     Returns two-digit version number of Python as a string, e.g. '3.9'.
@@ -250,11 +231,13 @@ def python_version():
 
 def cpu_name():
     '''
-    Returns 'x32' or 'x64' depending on Python build.
+    Returns `arm32`, `arm64`, `x32` or `x64` depending on Python build.
     '''
-    ret = f'x{32 if sys.maxsize == 2**31 - 1 else 64}'
-    #jlib.log(f'returning ret={ret!r}')
-    return ret
+    bits = int.bit_length(sys.maxsize+1)
+    if platform.machine().startswith('ARM'):
+        return f'arm{bits}'
+    else:
+        return f'x{bits}'
 
 def cmd_run_multiple(commands, prefix=None):
     '''
@@ -273,6 +256,8 @@ def cmd_run_multiple(commands, prefix=None):
 class BuildDirs:
     '''
     Locations of various generated files.
+
+    self.cpu: (Windows only) a pipcl.wdev.WindowsCpu instance.
     '''
     def __init__( self):
 
@@ -346,12 +331,12 @@ class BuildDirs:
             self.cpu = None
             self.python_version = None
             for flag in flags:
-                if flag in ('x32', 'x64'):
-                    self.cpu = Cpu(flag)
+                if flag in ('x32', 'x64', 'arm32', 'arm64'):
+                    self.cpu = pipcl.wdev.WindowsCpu(flag)
                 if flag.startswith('py'):
                     self.python_version = flag[2:]
             if not self.cpu:
-                self.cpu = Cpu(cpu_name())
+                self.cpu = pipcl.wdev.WindowsCpu()
                 self.dir_so += f'-{self.cpu.name}'
             if not self.python_version:
                 self.python_version = python_version()
@@ -359,12 +344,12 @@ class BuildDirs:
             #jlib.log('{self.cpu=} {self.python_version=} {dir_so=}')
         else:
             # Use Python we are running under.
-            self.cpu = Cpu(cpu_name())
             self.python_version = python_version()
 
         # Set self.Py_LIMITED_API and self.nogil.
         self.Py_LIMITED_API = None
         self.nogil = False
+        self.locking = False
         flags = os.path.basename(self.dir_so).split('-')
         for flag in flags:
             if flag in ('Py_LIMITED_API', 'PLA'):
@@ -375,8 +360,10 @@ class BuildDirs:
                 self.Py_LIMITED_API = flag[len('Py_LIMITED_API_'):]
             elif flag.startswith('PLA_'):
                 self.Py_LIMITED_API = flag[len('PLA_'):]
-            if flag == 'nogil':
+            elif flag == 'nogil':
                 self.nogil = True
+            elif flag == 'locking':
+                self.locking = True
 
         jlib.log(f'{self.Py_LIMITED_API=}')
 
@@ -385,7 +372,15 @@ class BuildDirs:
         # without rebuilding unnecessarily.
         Py_LIMITED_API_infix = f'-Py_LIMITED_API_{self.Py_LIMITED_API}' if self.Py_LIMITED_API else ''
         nogil_infix = '-nogil' if self.nogil else ''
-        self.mupdfcpp_swig_i    = lambda language: f'{self.dir_mupdf}/platform/{language}/mupdfcpp_swig{Py_LIMITED_API_infix}{nogil_infix}.i'
+        try:
+            t = jlib.system( f'swig -version', out='return', verbose=0)
+        except Exception:
+            jlib.log('No swig installed, .i path using dummy element.')
+            swig_version='none'
+        else:
+            m = re.search( 'SWIG Version (.+)', t)
+            swig_version = m.group(1).strip()
+        self.mupdfcpp_swig_i    = lambda language: f'{self.dir_mupdf}/platform/{language}/mupdfcpp_swig-python{platform.python_version()}-swig{swig_version}{Py_LIMITED_API_infix}{nogil_infix}.i'
         self.mupdfcpp_swig_cpp  = lambda language: self.mupdfcpp_swig_i(language) + '.cpp'
 
     def windows_build_type(self):

@@ -20,17 +20,21 @@
 // Artifex Software, Inc., 39 Mesa Street, Suite 108A, San Francisco,
 // CA 94129, USA, for further information.
 
+/*
+	## Device
+*/
+
 #ifndef MUPDF_FITZ_DEVICE_H
 #define MUPDF_FITZ_DEVICE_H
 
 #include "mupdf/fitz/system.h"
-#include "mupdf/fitz/context.h"
 #include "mupdf/fitz/geometry.h"
 #include "mupdf/fitz/image.h"
 #include "mupdf/fitz/shade.h"
 #include "mupdf/fitz/path.h"
 #include "mupdf/fitz/text.h"
 #include "mupdf/fitz/options.h"
+#include "mupdf/fitz/list.h"
 
 /**
 	The different format handlers (pdf, xps etc) interpret pages to
@@ -45,7 +49,7 @@
 */
 typedef struct fz_device fz_device;
 
-enum
+enum fz_device_flags
 {
 	/* Flags */
 	FZ_DEVFLAG_MASK = 1,
@@ -64,7 +68,7 @@ enum
 	FZ_DEVFLAG_DASH_PATTERN_UNDEFINED = 8192,
 };
 
-enum
+enum fz_blend_mode
 {
 	/* PDF 1.4 -- standard separable */
 	FZ_BLEND_NORMAL,
@@ -84,12 +88,7 @@ enum
 	FZ_BLEND_HUE,
 	FZ_BLEND_SATURATION,
 	FZ_BLEND_COLOR,
-	FZ_BLEND_LUMINOSITY,
-
-	/* For packing purposes */
-	FZ_BLEND_MODEMASK = 15,
-	FZ_BLEND_ISOLATED = 16,
-	FZ_BLEND_KNOCKOUT = 32
+	FZ_BLEND_LUMINOSITY
 };
 
 /**
@@ -113,11 +112,8 @@ typedef struct fz_function fz_function;
 
 typedef void (fz_function_eval_fn)(fz_context *, fz_function *, const float *, float *);
 
-enum
-{
-	FZ_FUNCTION_MAX_N = FZ_MAX_COLORS,
-	FZ_FUNCTION_MAX_M = FZ_MAX_COLORS
-};
+#define FZ_FUNCTION_MAX_N FZ_MAX_COLORS
+#define FZ_FUNCTION_MAX_M FZ_MAX_COLORS
 
 struct fz_function
 {
@@ -174,14 +170,14 @@ size_t fz_function_size(fz_context *ctx, fz_function *func);
 	Devices can keep track of containers (clips/masks/groups/tiles)
 	as they go to save callers having to do it.
 */
-typedef struct
+typedef struct fz_device_container_stack
 {
 	fz_rect scissor;
 	int type;
 	int user;
 } fz_device_container_stack;
 
-enum
+enum fz_device_container_stack_type
 {
 	fz_device_container_stack_is_clip,
 	fz_device_container_stack_is_mask,
@@ -190,7 +186,7 @@ enum
 };
 
 /* Structure types */
-typedef enum
+typedef enum fz_structure
 {
 	FZ_STRUCTURE_INVALID = -1,
 
@@ -278,7 +274,7 @@ typedef enum
 const char *fz_structure_to_string(fz_structure type);
 fz_structure fz_structure_from_string(const char *str);
 
-typedef enum
+typedef enum fz_metatext
 {
 	FZ_METATEXT_ACTUALTEXT,
 	FZ_METATEXT_ALT,
@@ -335,12 +331,12 @@ struct fz_device
 
 	fz_rect d1_rect;
 
-	int container_len;
-	int container_cap;
-	fz_device_container_stack *container;
+	fz_list(fz_device_container_stack, container);
 
 	/* For simplicity, every device has a passthrough entry, but not every device uses it. */
 	fz_device *passthrough;
+
+	void *external_mutex;
 };
 
 /**
@@ -443,7 +439,7 @@ void fz_disable_device_hints(fz_context *ctx, fz_device *dev, int hints);
 */
 fz_rect fz_device_current_scissor(fz_context *ctx, fz_device *dev);
 
-enum
+enum fz_device_hints
 {
 	/* Hints */
 	FZ_DONT_INTERPOLATE_IMAGES = 1,
@@ -495,7 +491,7 @@ enum
 	incomplete: Initially should be set to 0. Will be set to
 	non-zero if a TRYLATER error is thrown during rendering.
 */
-typedef struct
+typedef struct fz_cookie
 {
 	int abort;
 	int progress;
@@ -551,7 +547,7 @@ fz_device *fz_new_bbox_device(fz_context *ctx, fz_rect *rectp);
 */
 fz_device *fz_new_test_device(fz_context *ctx, int *is_color, float threshold, int options, fz_device *passthrough);
 
-enum
+enum fz_test_device_options
 {
 	/* If set, test every pixel of images exhaustively.
 	 * If clear, just look at colorspaces for images. */
@@ -571,7 +567,7 @@ enum
 
 	drop is called when the culling device is closed.
 */
-typedef struct
+typedef struct fz_culling_options
 {
 	void *opaque;
 
@@ -678,7 +674,7 @@ fz_device *fz_new_draw_device_type3(fz_context *ctx, fz_matrix transform, fz_pix
 	struct fz_draw_options: Options for creating a pixmap and draw
 	device.
 */
-typedef struct
+typedef struct fz_draw_options
 {
 	int rotate;
 	int x_resolution;

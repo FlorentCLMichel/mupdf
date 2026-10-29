@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -28,7 +28,7 @@
 #include <string.h>
 #include <limits.h>
 
-#undef DEBUG_SCAN_CONVERTER
+//#define DEBUG_SCAN_CONVERTER
 
 /* Define ourselves a 'fixed' type for clarity */
 typedef int fixed;
@@ -69,7 +69,7 @@ typedef struct
 }
 cursor_t;
 
-typedef struct fz_edgebuffer_s
+typedef struct fz_edgebuffer
 {
 	fz_rasterizer super;
 	int app;

@@ -1255,13 +1255,13 @@ pdf_opcount_k(fz_context *ctx, pdf_processor *proc, float c, float m, float y, f
 /* shadings, images, xobjects */
 
 static void
-pdf_opcount_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace)
+pdf_opcount_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace, int cs_is_inline)
 {
 	pdf_opcount_processor *p = (pdf_opcount_processor*)proc;
 	size_t z = p->buffer->len;
 
 	if (p->mine->op_BI)
-		p->mine->op_BI(ctx, p->mine, image, colorspace);
+		p->mine->op_BI(ctx, p->mine, image, colorspace, cs_is_inline);
 
 	z = p->buffer->len - z;
 	p->op_usage->len[OP_BI] += z;
@@ -1683,24 +1683,26 @@ filter_obj(fz_context *ctx, obj_info_t *oi, pdf_obj *obj)
 
 typedef struct
 {
-	int len;
-	int max;
-	struct {
-		pdf_obj *obj;
-		int pos;
-		int state;
-	} *stack;
+	pdf_obj *obj;
+	int pos;
+	int state;
+} walk_stack_entry_t;
+
+typedef struct
+{
+	fz_list(walk_stack_entry_t, stack);
 } walk_stack_t;
 
 static void
 walk(fz_context *ctx, walk_stack_t *ws, int n, obj_info_t *oi, pdf_obj *obj, audit_type_t type)
 {
-	int num = 0;
 	do
 	{
+		walk_stack_entry_t *wse;
+
 		if (pdf_is_indirect(ctx, obj))
 		{
-			num = pdf_to_num(ctx, obj);
+			int num = pdf_to_num(ctx, obj);
 			if (num < 0 || num >= n)
 				fz_throw(ctx, FZ_ERROR_GENERIC, "object outside of xref range");
 			if (oi[num].type != AUDIT_UNKNOWN)
@@ -1712,14 +1714,7 @@ walk(fz_context *ctx, walk_stack_t *ws, int n, obj_info_t *oi, pdf_obj *obj, aud
 			}
 		}
 		/* Push the object onto the stack. */
-		if (ws->len == ws->max)
-		{
-			int newmax = ws->max * 2;
-			if (newmax == 0)
-				newmax = 32;
-			ws->stack = fz_realloc(ctx, ws->stack, sizeof(ws->stack[0]) * newmax);
-			ws->max = newmax;
-		}
+		wse = fz_push_list(ctx, ws->stack);
 
 		/* If the object we are about to stack is a dict, then check to see if
 		 * we should be changing type because of it. */
@@ -1759,16 +1754,17 @@ walk(fz_context *ctx, walk_stack_t *ws, int n, obj_info_t *oi, pdf_obj *obj, aud
 			else if (pdf_name_eq(ctx, otype, PDF_NAME(Metadata)))
 				type = AUDIT_METADATA;
 		}
-		ws->stack[ws->len].obj = obj;
-		ws->stack[ws->len].pos = 0;
-		ws->stack[ws->len].state = type;
-		ws->len++;
+		wse->obj = obj;
+		wse->pos = 0;
+		wse->state = type;
 
 		/* So we have stepped successfully onto obj. */
 		/* Record its type. */
 		if (type != AUDIT_UNKNOWN)
 		{
-			num = pdf_obj_parent_num(ctx, obj);
+			int num = pdf_obj_parent_num(ctx, obj);
+			if (num < 0 || num >= n)
+				goto pop;
 			oi[num].type = type;
 		}
 
@@ -1778,10 +1774,10 @@ walk(fz_context *ctx, walk_stack_t *ws, int n, obj_info_t *oi, pdf_obj *obj, aud
 			pdf_obj *key;
 			/* We've just stepped onto a dict. */
 step_next_dict_child:
-			if (ws->stack[ws->len-1].pos == pdf_dict_len(ctx, obj))
+			if (ws->stack[ws->stack_len-1].pos == pdf_dict_len(ctx, obj))
 				goto pop;
-			key = pdf_dict_get_key(ctx, ws->stack[ws->len-1].obj, ws->stack[ws->len-1].pos);
-			ws->stack[ws->len-1].pos++;
+			key = pdf_dict_get_key(ctx, ws->stack[ws->stack_len-1].obj, ws->stack[ws->stack_len-1].pos);
+			ws->stack[ws->stack_len-1].pos++;
 
 			if (pdf_name_eq(ctx, key, PDF_NAME(Parent)))
 				goto step_next_dict_child;
@@ -1814,17 +1810,17 @@ step_next_dict_child:
 				type = AUDIT_PIECE_INFORMATION;
 
 			/* OK. step onto the val. */
-			obj = pdf_dict_get_val(ctx, ws->stack[ws->len-1].obj, ws->stack[ws->len-1].pos-1);
+			obj = pdf_dict_get_val(ctx, ws->stack[ws->stack_len-1].obj, ws->stack[ws->stack_len-1].pos-1);
 			continue;
 		}
 		else if (pdf_is_array(ctx, obj))
 		{
 step_next_array_child:
-			if (ws->stack[ws->len-1].pos == pdf_array_len(ctx, obj))
+			if (ws->stack[ws->stack_len-1].pos == pdf_array_len(ctx, obj))
 				goto pop;
 
-			obj = pdf_array_get(ctx, ws->stack[ws->len-1].obj, ws->stack[ws->len-1].pos);
-			ws->stack[ws->len-1].pos++;
+			obj = pdf_array_get(ctx, ws->stack[ws->stack_len-1].obj, ws->stack[ws->stack_len-1].pos);
+			ws->stack[ws->stack_len-1].pos++;
 			continue;
 		}
 
@@ -1834,14 +1830,13 @@ pop:
 		{
 			pdf_unmark_obj(ctx, obj);
 		}
-		ws->len--;
+		ws->stack_len--;
 visited:
-		if (ws->len > 0)
+		if (ws->stack_len > 0)
 		{
 			/* We should either have stepped up to a dict or an array. */
-			obj = ws->stack[ws->len-1].obj;
-			type = ws->stack[ws->len-1].state;
-			num = pdf_obj_parent_num(ctx, obj);
+			obj = ws->stack[ws->stack_len-1].obj;
+			type = ws->stack[ws->stack_len-1].state;
 			if (pdf_is_dict(ctx, obj))
 				goto step_next_dict_child;
 			else if (pdf_is_array(ctx, obj))
@@ -1850,7 +1845,7 @@ visited:
 				fz_throw(ctx, FZ_ERROR_GENERIC, "this should never happen!");
 		}
 	}
-	while (ws->len > 0);
+	while (ws->stack_len > 0);
 }
 
 static void

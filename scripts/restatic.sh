@@ -1,4 +1,4 @@
-# Simple script to revert the changes made by destatic.sh
+# Simple script to revert the changes made by unstatic.sh
 
 # Allow for the fact that mujs might not be present
 MUJS_SRC=

@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -20,37 +20,37 @@
 // Artifex Software, Inc., 39 Mesa Street, Suite 108A, San Francisco,
 // CA 94129, USA, for further information.
 
-#ifndef TRACK_USAGE_H
-#define TRACK_USAGE_H
+#ifndef MUPDF_FITZ_TRACK_USAGE_H
+#define MUPDF_FITZ_TRACK_USAGE_H
 
 #ifdef TRACK_USAGE
 
-typedef struct track_usage_data {
+typedef struct fz_track_usage_data {
 	int count;
 	const char *function;
 	int line;
 	const char *desc;
-	struct track_usage_data *next;
-} track_usage_data;
+	struct fz_track_usage_data *next;
+} fz_track_usage_data;
 
-#define TRACK_LABEL(A) \
+#define FZ_TRACK_LABEL(A) \
 	do { \
-		static track_usage_data USAGE_DATA = { 0 };\
-		track_usage(&USAGE_DATA, __FILE__, __LINE__, A);\
+		static fz_track_usage_data USAGE_DATA = { 0 };\
+		fz_track_usage(&USAGE_DATA, __FILE__, __LINE__, A);\
 	} while (0)
 
-#define TRACK_FN() \
+#define FZ_TRACK_FUNCTION() \
 	do { \
-		static track_usage_data USAGE_DATA = { 0 };\
-		track_usage(&USAGE_DATA, __FILE__, __LINE__, __FUNCTION__);\
+		static fz_track_usage_data USAGE_DATA = { 0 };\
+		fz_track_usage(&USAGE_DATA, __FILE__, __LINE__, __FUNCTION__);\
 	} while (0)
 
-void track_usage(track_usage_data *data, const char *function, int line, const char *desc);
+void fz_track_usage(fz_track_usage_data *data, const char *function, int line, const char *desc);
 
 #else
 
-#define TRACK_LABEL(A) do { } while (0)
-#define TRACK_FN() do { } while (0)
+#define FZ_TRACK_LABEL(A) do { } while (0)
+#define FZ_TRACK_FUNCTION() do { } while (0)
 
 #endif
 

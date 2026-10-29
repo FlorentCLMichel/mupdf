@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -25,7 +25,7 @@
 
 #include "export.h"
 
-typedef struct
+typedef struct fz_getopt_long_options
 {
 	char *option;
 	int *flag;
@@ -35,11 +35,14 @@ typedef struct
 /**
 	Simple functions/variables for use in tools.
 
-	ostr = option string. Comprises single letter options, followed by : if there
-	is an argument to the option.
+	ostr:
+		Short option list.
+		Comprises single letter options, followed by ":" if there is an argument to the option.
 
-	longopts: NULL (indicating no long options), or a pointer to an array of
-	longoptions, terminated by an entry with option == NULL.
+	longopts:
+		Long option list.
+		NULL (indicating no long options), or a pointer to an array of longoptions,
+		terminated by an entry with option == NULL.
 
 	In the event of matching a single char option, this function will normally
 	return the char. The exception to this is when the option requires an
@@ -53,9 +56,9 @@ typedef struct
 	given, an error will be displayed and argument processing will stop. If an argument
 	is given, and the long option record contains a non-null flag pointer, then the code
 	will decode the argument and fill in that flag pointer. Specifically,
-	case-insensitive matches to 'yes', 'no', 'true' and 'false' will cause a value of 0
-	or 1 as appropriate to be written; failing this the arg will be interpreted as a
-	decimal integer using atoi.
+	case-insensitive matches to 'yes', 'no', 'true', 'false', 'on' and 'off' will cause
+	a value of 0 or 1 as appropriate to be written; failing this the arg will be
+	interpreted as a decimal integer using atoi.
 
 	A long option entry may be followed by an list of options (e.g. myoption=foo|bar|baz)
 	and the option will be passed to fz_opt_from_list. The return value of that will be
@@ -70,13 +73,13 @@ typedef struct
 	at the start of the argument. Examples of supported argument formats: '-r500', '-r 500',
 	'--resolution 500', '--resolution=500'.
 */
-extern int fz_getopt_long(int nargc, char * const *nargv, const char *ostr, const fz_getopt_long_options *longopts);
+int fz_getopt_long(int nargc, char * const *nargv, const char *ostr, const fz_getopt_long_options *longopts);
 
 /**
 	Identical to fz_getopt_long, but with a NULL longopts field, signifying no long
 	options.
 */
-extern int fz_getopt(int nargc, char * const *nargv, const char *ostr);
+int fz_getopt(int nargc, char * const *nargv, const char *ostr);
 
 /**
 	fz_optind is updated to point to the current index being read from the
@@ -111,12 +114,12 @@ FZ_DATA extern int fz_optitem;
 	For instance for optlist = "Foo|Bar|Baz", and  opt = "bar",
 	this would return 1.
 
-	If the optlist ends with "|*" then that is a catch all case and
+	If the optlist ends with `|*` then that is a catch all case and
 	matches all options allowing the caller to process it itself.
 	fz_optarg will be set to point to the option, and the return
-	value will be the index of the '*' option within that list.
+	value will be the index of the `*` option within that list.
 
-	If an optlist entry ends with ':' (e.g. "Foo:") then that option
+	If an optlist entry ends with `:` (e.g. "Foo:") then that option
 	may have suboptions appended to it (for example "JPG:80") and
 	fz_optarg will be set to point at "80". Otherwise fz_optarg will
 	be set to NULL.

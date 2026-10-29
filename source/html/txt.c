@@ -21,7 +21,6 @@
 // CA 94129, USA, for further information.
 
 #include "mupdf/fitz.h"
-#include "mupdf/html.h"
 
 enum { ENCODING_ASCII, ENCODING_UTF8, ENCODING_UTF8_BOM, ENCODING_UTF16_LE, ENCODING_UTF16_BE };
 
@@ -220,7 +219,7 @@ txt_to_html(fz_context *ctx, fz_html_font_set *set, fz_buffer *buf, fz_archive *
 	return fz_txt_buffer_to_html(ctx, buf);
 }
 
-static const fz_htdoc_format_t fz_htdoc_txt =
+static const fz_htdoc_format fz_htdoc_txt =
 {
 	"Text",
 	txt_to_html,

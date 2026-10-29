@@ -108,6 +108,9 @@
     <ClCompile Include="..\..\source\fitz\buffer.c">
       <Filter>fitz</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\source\fitz\crc32.c">
+      <Filter>fitz</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\source\fitz\color-fast.c">
       <Filter>fitz</Filter>
     </ClCompile>
@@ -133,6 +136,9 @@
       <Filter>fitz</Filter>
     </ClCompile>
     <ClCompile Include="..\..\source\fitz\crypt-arc4.c">
+      <Filter>fitz</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\source\fitz\crypt-chacha20.c">
       <Filter>fitz</Filter>
     </ClCompile>
     <ClCompile Include="..\..\source\fitz\crypt-md5.c">
@@ -426,6 +432,9 @@
     <ClCompile Include="..\..\source\fitz\xml.c">
       <Filter>fitz</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\source\fitz\xml-dom.c">
+      <Filter>fitz</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\source\fitz\zip.c">
       <Filter>fitz</Filter>
     </ClCompile>
@@ -621,9 +630,6 @@
     <ClCompile Include="..\..\source\reflow\reflow-doc.c">
       <Filter>reflow</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\source\html\xml-dom.c">
-      <Filter>html</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\source\html\mobi.c">
       <Filter>html</Filter>
     </ClCompile>
@@ -743,6 +749,9 @@
     </ClCompile>
     <ClCompile Include="..\..\source\pdf\pdf-struct.c">
       <Filter>pdf</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\source\fitz\list.c">
+      <Filter>fitz</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -1007,7 +1016,7 @@
     <ClInclude Include="..\..\include\mupdf\fitz\heap-imp.h">
       <Filter>!include\fitz</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\include\mupdf\html.h">
+    <ClInclude Include="..\..\include\mupdf\fitz\html.h">
       <Filter>!include</Filter>
     </ClInclude>
     <ClInclude Include="..\..\source\fitz\ucdn_db.h">
@@ -1042,6 +1051,12 @@
     </ClInclude>
     <ClInclude Include="..\..\include\mupdf\fitz\options.h">
       <Filter>!include\fitz</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\mupdf\fitz\list.h">
+      <Filter>!include\fitz</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\source\fitz\fitz-imp.h">
+      <Filter>fitz</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

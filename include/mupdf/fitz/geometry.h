@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -20,17 +20,14 @@
 // Artifex Software, Inc., 39 Mesa Street, Suite 108A, San Francisco,
 // CA 94129, USA, for further information.
 
-#ifndef MUPDF_FITZ_MATH_H
-#define MUPDF_FITZ_MATH_H
+#ifndef MUPDF_FITZ_GEOMETRY_H
+#define MUPDF_FITZ_GEOMETRY_H
 
 #include "mupdf/fitz/system.h"
 
 #include <math.h>
+#include <limits.h>
 #include <assert.h>
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 /**
 	Multiply scaled two integers in the 0..255 range
@@ -178,12 +175,10 @@ static inline void *fz_clampp(void *x, void *min, void *max)
 	return x < min ? min : x > max ? max : x;
 }
 
-#define DIV_BY_ZERO(a, b, min, max) (((a) < 0) ^ ((b) < 0) ? (min) : (max))
-
 /**
 	fz_point is a point in a two-dimensional space.
 */
-typedef struct
+typedef struct fz_point
 {
 	float x, y;
 } fz_point;
@@ -227,7 +222,7 @@ static inline fz_point fz_make_point(float x, float y)
 #define FZ_MIN_INF_RECT ((int)0x80000000)
 #define FZ_MAX_INF_RECT ((int)0x7fffff80)
 
-typedef struct
+typedef struct fz_rect
 {
 	float x0, y0;
 	float x1, y1;
@@ -244,7 +239,7 @@ static inline fz_rect fz_make_rect(float x0, float y0, float x1, float y1)
 
 	It's used in the draw device and for pixmap dimensions.
 */
-typedef struct
+typedef struct fz_irect
 {
 	int x0, y0;
 	int x1, y1;
@@ -303,8 +298,8 @@ static inline int fz_is_empty_irect(fz_irect r)
 */
 static inline int fz_is_infinite_rect(fz_rect r)
 {
-	return (r.x0 == FZ_MIN_INF_RECT && r.x1 == FZ_MAX_INF_RECT &&
-		r.y0 == FZ_MIN_INF_RECT && r.y1 == FZ_MAX_INF_RECT);
+	return (r.x0 <= FZ_MIN_INF_RECT && r.x1 >= FZ_MAX_INF_RECT &&
+		r.y0 <= FZ_MIN_INF_RECT && r.y1 >= FZ_MAX_INF_RECT);
 }
 
 /**
@@ -313,8 +308,8 @@ static inline int fz_is_infinite_rect(fz_rect r)
 */
 static inline int fz_is_infinite_irect(fz_irect r)
 {
-	return (r.x0 == FZ_MIN_INF_RECT && r.x1 == FZ_MAX_INF_RECT &&
-		r.y0 == FZ_MIN_INF_RECT && r.y1 == FZ_MAX_INF_RECT);
+	return (r.x0 <= FZ_MIN_INF_RECT && r.x1 >= FZ_MAX_INF_RECT &&
+		r.y0 <= FZ_MIN_INF_RECT && r.y1 >= FZ_MAX_INF_RECT);
 }
 
 /**
@@ -346,9 +341,8 @@ fz_irect_width(fz_irect r)
 	 * if it does, it's pretty likely an indication of a severe
 	 * problem. */
 	w = (unsigned int)r.x1 - r.x0;
-	assert((int)w >= 0);
 	if ((int)w < 0)
-		return 0;
+		return INT_MAX;
 	return (int)w;
 }
 
@@ -365,9 +359,8 @@ fz_irect_height(fz_irect r)
 	 * if it does, it's pretty likely an indication of a severe
 	 * problem. */
 	h = (unsigned int)(r.y1 - r.y0);
-	assert((int)h >= 0);
 	if ((int)h < 0)
-		return 0;
+		return INT_MAX;
 	return (int)h;
 }
 
@@ -380,11 +373,17 @@ fz_irect_height(fz_irect r)
 	vary in a matrix. Below is how the elements map between
 	different representations.
 
-	/ a b 0 \
-	| c d 0 | normally represented as [ a b c d e f ].
-	\ e f 1 /
+	This 2-d matrix
+
+		/ a b 0 \
+		| c d 0 |
+		\ e f 1 /
+
+	is represented as a 1-d vector:
+
+		[ a b c d e f ]
 */
-typedef struct
+typedef struct fz_matrix
 {
 	float a, b, c, d, e, f;
 } fz_matrix;
@@ -778,7 +777,7 @@ float fz_matrix_max_expansion(fz_matrix m);
 	The significant difference between quads and rects is that
 	the edges of quads are not axis aligned.
 */
-typedef struct
+typedef struct fz_quad
 {
 	fz_point ul, ur, ll, lr;
 } fz_quad;

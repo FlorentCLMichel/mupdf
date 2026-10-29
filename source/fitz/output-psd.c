@@ -77,7 +77,7 @@ fz_write_pixmap_as_psd(fz_context *ctx, fz_output *out, const fz_pixmap *pixmap)
 	}
 }
 
-typedef struct psd_band_writer_s
+typedef struct psd_band_writer
 {
 	fz_band_writer super;
 	int num_additive;

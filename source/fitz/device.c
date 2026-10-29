@@ -28,6 +28,17 @@ fz_device *
 fz_new_device_of_size(fz_context *ctx, int size)
 {
 	fz_device *dev = Memento_label(fz_calloc(ctx, 1, size), "fz_device");
+
+	if (ctx->locks.create_external_mutex)
+	{
+		dev->external_mutex = ctx->locks.create_external_mutex(ctx->locks.user);
+		if (dev->external_mutex == NULL)
+		{
+			fz_free(ctx, dev);
+			fz_throw(ctx, FZ_ERROR_SYSTEM, "Device lock creation failed");
+		}
+	}
+
 	dev->refs = 1;
 	return dev;
 }
@@ -99,6 +110,8 @@ fz_drop_device(fz_context *ctx, fz_device *dev)
 		if (dev->drop_device)
 			dev->drop_device(ctx, dev);
 		fz_free(ctx, dev->container);
+		if (dev->external_mutex && ctx->locks.destroy_external_mutex)
+			ctx->locks.destroy_external_mutex(ctx->locks.user, dev->external_mutex);
 		fz_free(ctx, dev);
 	}
 }
@@ -122,23 +135,14 @@ fz_disable_device_hints(fz_context *ctx, fz_device *dev, int hints)
 static void
 push_clip_stack(fz_context *ctx, fz_device *dev, fz_rect rect, int type)
 {
-	if (dev->container_len == dev->container_cap)
-	{
-		int newmax = dev->container_cap * 2;
-		if (newmax == 0)
-			newmax = 4;
-		dev->container = fz_realloc_array(ctx, dev->container, newmax, fz_device_container_stack);
-		dev->container_cap = newmax;
-	}
-	if (dev->container_len == 0)
-		dev->container[0].scissor = rect;
+	fz_device_container_stack *c = fz_push_list(ctx, dev->container);
+
+	if (dev->container_len == 1)
+		c->scissor = rect;
 	else
-	{
-		dev->container[dev->container_len].scissor = fz_intersect_rect(dev->container[dev->container_len-1].scissor, rect);
-	}
-	dev->container[dev->container_len].type = type;
-	dev->container[dev->container_len].user = 0;
-	dev->container_len++;
+		c->scissor = fz_intersect_rect(c[-1].scissor, rect);
+	c->type = type;
+	c->user = 0;
 }
 
 static void

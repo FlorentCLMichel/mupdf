@@ -305,9 +305,13 @@ struct fz_font_context
 	/* Cached fallback fonts */
 	fz_font *base14[14];
 	fz_font *cjk[4];
-	struct { fz_font *serif, *sans; } fallback[256];
+	struct {
+		// [SERIF][BOLD][ITALIC]
+		fz_font *font[2][2][2];
+	} fallback[256];
 	fz_font *symbol1, *symbol2, *math, *music, *boxes;
 	fz_font *emoji;
+	fz_font *notos[256];
 };
 
 #undef __FTERRORS_H__
@@ -410,9 +414,17 @@ void fz_drop_font_context(fz_context *ctx)
 			fz_drop_font(ctx, ctx->font->cjk[i]);
 		for (i = 0; i < (int)nelem(ctx->font->fallback); ++i)
 		{
-			fz_drop_font(ctx, ctx->font->fallback[i].serif);
-			fz_drop_font(ctx, ctx->font->fallback[i].sans);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[0][0][0]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[0][0][1]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[0][1][0]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[0][1][1]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[1][0][0]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[1][0][1]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[1][1][0]);
+			fz_drop_font(ctx, ctx->font->fallback[i].font[1][1][1]);
 		}
+		for (i = 0; i < (int)nelem(ctx->font->notos); ++i)
+			fz_drop_font(ctx, ctx->font->notos[i]);
 		fz_drop_font(ctx, ctx->font->symbol1);
 		fz_drop_font(ctx, ctx->font->symbol2);
 		fz_drop_font(ctx, ctx->font->math);
@@ -495,6 +507,20 @@ fz_font *fz_load_system_fallback_font(fz_context *ctx, int script, int language,
 	return font;
 }
 
+static int
+score_stylistic_match(int want_serif, int want_bold, int want_italic, int is_serif, int is_bold, int is_italic)
+{
+	int score = 0;
+
+	if (!!want_serif != !!is_serif)
+		score += 1;
+	if (!!want_bold != !!is_bold)
+		score += 2;
+	if (!!want_italic != !!is_italic)
+		score += 4;
+	return score;
+}
+
 fz_font *fz_load_fallback_font(fz_context *ctx, int script, int language, int serif, int bold, int italic)
 {
 	fz_font **fontp;
@@ -526,20 +552,33 @@ fz_font *fz_load_fallback_font(fz_context *ctx, int script, int language, int se
 			index = UCDN_LAST_SCRIPT + 5;
 	}
 
-	if (serif)
-		fontp = &ctx->font->fallback[index].serif;
-	else
-		fontp = &ctx->font->fallback[index].sans;
+	fontp = &ctx->font->fallback[index].font[!!serif][!!bold][!!italic];
 
 	if (!*fontp)
 	{
+		int user_score;
+		/* Try for a user registered fallback font. */
 		*fontp = fz_load_system_fallback_font(ctx, script, language, serif, bold, italic);
-		if (!*fontp)
+		/* This should only return a match if it matched script and language, but it might be
+		 * a 'fuzzy' stylistic match. Let's score that match. */
+		user_score = *fontp ? score_stylistic_match(serif, bold, italic, fz_font_is_serif(ctx, *fontp), fz_font_is_bold(ctx, *fontp), fz_font_is_italic(ctx, *fontp)) : 9999;
+		/* If the match wasn't perfect (or we didn't get one at all), then try for an inbuilt match. */
+		if (user_score != 0)
 		{
-			data = fz_lookup_noto_font(ctx, script, language, &size, &subfont);
-			if (data)
+			int attr, noto_score, noto_index;
+			data = fz_lookup_noto_font(ctx, script, language, &size, &subfont, &attr, &noto_index);
+			noto_score = data ? score_stylistic_match(serif, bold, italic, attr & FZ_FONT_ATTR_SERIF, attr & FZ_FONT_ATTR_BOLD, attr & FZ_FONT_ATTR_ITALIC) : 9999;
+			/* If we found a noto font that had a better stylistic score than the user match, use that in preference. */
+			if (data && noto_score < user_score)
 			{
-				*fontp = fz_new_font_from_memory(ctx, NULL, data, size, subfont, 0);
+				/* Drop our reference to the callback supplied font */
+				fz_drop_font(ctx, *fontp);
+				*fontp = NULL;
+				/* If we don't have an instance of this font, make one. */
+				if (ctx->font->notos[noto_index] == NULL)
+					ctx->font->notos[noto_index] = fz_new_font_from_memory(ctx, NULL, data, size, subfont, 0);
+				/* Return a reference to this instance. */
+				*fontp = fz_keep_font(ctx, ctx->font->notos[noto_index]);
 				/* Noto fonts can be embedded. */
 				fz_set_font_embedding(ctx, *fontp, 1);
 			}
@@ -723,6 +762,9 @@ fz_new_font_from_buffer(fz_context *ctx, const char *name, fz_buffer *buffer, in
 	FT_UShort flags;
 	char namebuf[sizeof(font->name)];
 	fz_ascdesc_source ascdesc_src = FZ_ASCDESC_FROM_FONT;
+
+	if (index < 0)
+		fz_throw(ctx, FZ_ERROR_ARGUMENT, "Font index must be non-negative");
 
 	fz_keep_freetype(ctx);
 
@@ -2131,7 +2173,6 @@ fz_encode_character_with_fallback(fz_context *ctx, fz_font *user_font, int unico
 			return *out_font = font, gid;
 	}
 
-#ifndef TOFU_CJK_LANG
 	if (script == UCDN_SCRIPT_HAN)
 	{
 		font = fz_load_fallback_font(ctx, script, FZ_LANG_zh_Hant, is_serif, is_bold, is_italic);
@@ -2163,7 +2204,6 @@ fz_encode_character_with_fallback(fz_context *ctx, fz_font *user_font, int unico
 				return *out_font = font, gid;
 		}
 	}
-#endif
 
 	font = fz_load_fallback_math_font(ctx);
 	if (font)
@@ -2270,7 +2310,7 @@ fz_font_flags_t *fz_font_flags(fz_font *font)
 	return font ? &font->flags : NULL;
 }
 
-fz_shaper_data_t *fz_font_shaper_data(fz_context *ctx, fz_font *font)
+fz_shaper_data *fz_font_shaper_data(fz_context *ctx, fz_font *font)
 {
 	return font ? &font->shaper_data : NULL;
 }
@@ -2363,9 +2403,14 @@ fz_extract_ttf_from_ttc(fz_context *ctx, fz_font *font)
 			fz_write_uint32_be(ctx, out, fz_read_uint32(ctx, stream)); /* checksum */
 			bd[i].offset = fz_read_uint32(ctx, stream);
 			fz_write_uint32_be(ctx, out, start_pos);
+			bd[i].length = fz_read_uint32(ctx, stream);
 			if (tag == CHR('h','e','a','d'))
+			{
+				if (bd[i].length < 12)
+					fz_throw(ctx, FZ_ERROR_FORMAT, "head block of font is illegally short");
 				csumpos = start_pos + 8;
-			fz_write_uint32_be(ctx, out, bd[i].length = fz_read_uint32(ctx, stream));
+			}
+			fz_write_uint32_be(ctx, out, bd[i].length);
 			start_pos += (bd[i].length + 3) & ~3;
 		}
 

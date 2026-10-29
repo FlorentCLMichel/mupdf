@@ -24,14 +24,14 @@
 #define MUPDF_FITZ_OUTLINE_H
 
 #include "mupdf/fitz/system.h"
-#include "mupdf/fitz/types.h"
 #include "mupdf/fitz/context.h"
 #include "mupdf/fitz/link.h"
 #include "mupdf/fitz/output.h"
 
 /* Outline */
 
-typedef struct {
+typedef struct fz_outline_item
+{
 	char *title;
 	char *uri;
 	int is_open;
@@ -41,13 +41,13 @@ typedef struct {
 	float b;
 } fz_outline_item;
 
-enum
+enum fz_outline_flag
 {
 	FZ_OUTLINE_FLAG_BOLD = 1,
 	FZ_OUTLINE_FLAG_ITALIC = 2,
 };
 
-enum
+enum fz_outline_iterator_state
 {
 	FZ_OUTLINE_ITERATOR_DID_NOT_MOVE = -1,
 	FZ_OUTLINE_ITERATOR_AT_ITEM = 0,

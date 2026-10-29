@@ -36,17 +36,19 @@
 	redacting a document, preserving the structure tree might leak
 	information.
  */
-typedef enum {
+typedef enum pdf_clean_options_structure
+{
 	PDF_CLEAN_STRUCTURE_DROP = 0,
 	PDF_CLEAN_STRUCTURE_KEEP = 1
 } pdf_clean_options_structure;
 
-typedef enum {
+typedef enum pdf_clean_options_vectorize
+{
 	PDF_CLEAN_VECTORIZE_NO = 0,
 	PDF_CLEAN_VECTORIZE_YES = 1
 } pdf_clean_options_vectorize;
 
-typedef struct
+typedef struct pdf_clean_options
 {
 	pdf_write_options write;
 	pdf_image_rewriter_options image;
@@ -64,6 +66,10 @@ typedef struct
 	 * Future values reserved.
 	 */
 	pdf_clean_options_vectorize vectorize;
+
+	/* If non NULL, external streams and the file itself will be loaded from this
+	* archive. */
+	fz_archive *dir;
 } pdf_clean_options;
 
 /*

@@ -272,6 +272,9 @@ do_recognize_document_stream_and_dir_content(fz_context *ctx, fz_stream **stream
 		}
 	}
 
+	fz_var(best_free_state);
+	fz_var(best_state);
+
 	fz_try(ctx)
 	{
 		int can_recognize_stream = ((stream && stream->seek != NULL) || (stream == NULL && dir != NULL));
@@ -504,11 +507,16 @@ fz_open_document_with_buffer(fz_context *ctx, const char *magic, fz_buffer *buff
 fz_document *
 fz_open_accelerated_document(fz_context *ctx, const char *filename, const char *accel)
 {
+	return fz_open_accelerated_document_with_dir(ctx, filename, accel, NULL);
+}
+
+fz_document *
+fz_open_accelerated_document_with_dir(fz_context *ctx, const char *filename, const char *accel, fz_archive *dir)
+{
 	const fz_document_handler *handler;
 	fz_stream *file = NULL;
 	fz_stream *afile = NULL;
 	fz_document *doc = NULL;
-	fz_archive *dir = NULL;
 	char dirname[PATH_MAX];
 	void *state = NULL;
 	fz_document_recognize_state_free_fn *free_state = NULL;
@@ -516,7 +524,7 @@ fz_open_accelerated_document(fz_context *ctx, const char *filename, const char *
 	if (filename == NULL)
 		fz_throw(ctx, FZ_ERROR_ARGUMENT, "no document to open");
 
-	if (fz_is_directory(ctx, filename))
+	if (dir == NULL && fz_is_directory(ctx, filename))
 	{
 		/* Cannot accelerate directories, currently. */
 		dir = fz_open_directory(ctx, filename);
@@ -541,11 +549,14 @@ fz_open_accelerated_document(fz_context *ctx, const char *filename, const char *
 
 	fz_try(ctx)
 	{
+		/* If we've been passed a dir from outside, then the code
+		 * below will drop it. Take a ref to keep things straight. */
+		dir = fz_keep_archive(ctx, dir);
 		file = fz_open_file(ctx, filename);
 
 		if (accel)
 			afile = fz_open_file(ctx, accel);
-		if (handler->wants_dir)
+		if (dir == NULL && handler->wants_dir)
 		{
 			fz_dirname(dirname, filename, sizeof dirname);
 			dir = fz_open_directory(ctx, dirname);
@@ -609,6 +620,16 @@ fz_new_document_of_size(fz_context *ctx, int size)
 	doc->refs = 1;
 	doc->id = fz_new_document_id(ctx);
 
+	if (ctx->locks.create_external_mutex)
+	{
+		doc->external_mutex = ctx->locks.create_external_mutex(ctx->locks.user);
+		if (doc->external_mutex == NULL)
+		{
+			fz_free(ctx, doc);
+			fz_throw(ctx, FZ_ERROR_SYSTEM, "Document lock creation failed");
+		}
+	}
+
 	doc->publisher_css = 1;
 	doc->user_css = NULL;
 	doc->did_style = FZ_STYLE_NEEDS_DEFAULT; /* Note: deprecated use of global fz_use_document_css and fz_user_css */
@@ -640,12 +661,14 @@ fz_drop_document(fz_context *ctx, fz_document *doc)
 		if (doc->drop_document)
 			doc->drop_document(ctx, doc);
 		fz_free(ctx, doc->user_css);
+		if (doc->external_mutex && ctx->locks.destroy_external_mutex)
+			ctx->locks.destroy_external_mutex(ctx->locks.user, doc->external_mutex);
 		fz_free(ctx, doc);
 	}
 }
 
-static void
-fz_ensure_layout(fz_context *ctx, fz_document *doc)
+void
+fz_ensure_styled(fz_context *ctx, fz_document *doc)
 {
 	/* Note: deprecated use of global fz_use_document_css and fz_user_css */
 	if (doc && doc->style && doc->did_style == FZ_STYLE_NEEDS_DEFAULT)
@@ -658,6 +681,13 @@ fz_ensure_layout(fz_context *ctx, fz_document *doc)
 		doc->style(ctx, doc);
 		doc->did_style = FZ_STYLE_APPLIED;
 	}
+
+}
+
+static void
+fz_ensure_layout(fz_context *ctx, fz_document *doc)
+{
+	fz_ensure_styled(ctx, doc);
 
 	if (doc && doc->layout && doc->did_layout == FZ_LAYOUT_NEEDS_UPDATE)
 	{

@@ -92,6 +92,12 @@ pdf_obj *pdf_ensure_indirect(fz_context *ctx, pdf_obj *obj);
 int pdf_obj_num_is_stream(fz_context *ctx, pdf_document *doc, int num);
 int pdf_is_stream(fz_context *ctx, pdf_obj *obj);
 
+/*
+	Check if an object, known to be a stream, is
+	an external one.
+*/
+int pdf_is_stream_external(fz_context *ctx, pdf_obj *obj);
+
 /* Compare 2 objects. Returns 0 on match, non-zero on mismatch.
  * Streams always mismatch.
  */
@@ -123,7 +129,7 @@ struct pdf_cycle_list {
 */
 int pdf_cycle(fz_context *ctx, pdf_cycle_list *here, pdf_cycle_list *prev, pdf_obj *obj);
 
-typedef struct
+typedef struct pdf_mark_bits
 {
 	int len;
 	unsigned char bits[FZ_FLEXIBLE_ARRAY];
@@ -134,7 +140,7 @@ void pdf_drop_mark_bits(fz_context *ctx, pdf_mark_bits *marks);
 void pdf_mark_bits_reset(fz_context *ctx, pdf_mark_bits *marks);
 int pdf_mark_bits_set(fz_context *ctx, pdf_mark_bits *marks, pdf_obj *obj);
 
-typedef struct
+typedef struct pdf_mark_list
 {
 	int len;
 	int max;
@@ -366,7 +372,7 @@ void pdf_set_int(fz_context *ctx, pdf_obj *obj, int64_t i);
 #define PDF_NAME(X) ((pdf_obj*)(intptr_t)PDF_ENUM_NAME_##X)
 
 #define PDF_MAKE_NAME(STRING,NAME) PDF_ENUM_NAME_##NAME,
-enum {
+enum pdf_obj_enum {
 	PDF_ENUM_NULL,
 	PDF_ENUM_TRUE,
 	PDF_ENUM_FALSE,

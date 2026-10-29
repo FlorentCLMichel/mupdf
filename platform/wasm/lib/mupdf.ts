@@ -256,16 +256,11 @@ interface Log {
 
 var $libmupdf_log: Log | null = null
 
-declare global {
-	function $libmupdf_log_error(message: Pointer<"char">): void
-	function $libmupdf_log_warning(message: Pointer<"char">): void
-}
-
-globalThis.$libmupdf_log_error = function (message) {
+libmupdf.$libmupdf_log_error = function (message) {
 	$libmupdf_log?.error?.(fromString(message))
 }
 
-globalThis.$libmupdf_log_warning = function (message) {
+libmupdf.$libmupdf_log_warning = function (message) {
 	$libmupdf_log?.warning?.(fromString(message))
 }
 
@@ -463,6 +458,14 @@ function COLOR(c?: AnnotColor) {
 	return _wasm_color << 2 as Pointer<"float">
 }
 
+function ensureOptions(value: any): String {
+	if (value === (void 0) || value === null)
+		return ""
+	if (typeof value === "string")
+		return value
+	return JSON.stringify(value)
+}
+
 /* -------------------------------------------------------------------------- */
 
 function fromColor(n: number): Color {
@@ -615,21 +618,24 @@ function colorFromNumber(argb: number): Color {
 /* -------------------------------------------------------------------------- */
 
 type SearchFunction = (
-	display_list: any,
+	haystack: any,
 	needle: Pointer<"char">,
 	marks: Pointer<"int">,
 	hits: Pointer<"fz_quad">,
-	hit_max: number
+	hit_max: number,
+	options: Pointer<"char">,
 ) => number
 
-function runSearch(searchFun: SearchFunction, searchThis: number, needle: string, max_hits = 500) {
+function runSearch(searchFun: SearchFunction, haystack: number, needle: string, options: any) {
+	const max_hits = 500
 	checkType(needle, "string")
+	options = ensureOptions(options)
 	let hits = 0 as Pointer<"fz_quad">
 	let marks = 0 as Pointer<"int">
 	try {
 		hits = Malloc<"fz_quad">(32 * max_hits)
 		marks = Malloc<"int">(4 * max_hits)
-		let n = searchFun(searchThis as any, STRING(needle), marks, hits, max_hits)
+		let n = searchFun(haystack as any, STRING(needle), marks, hits, max_hits, STRING2(options))
 		let outer: Quad[][] = []
 		if (n > 0) {
 			let inner: Quad[] = []
@@ -1319,8 +1325,8 @@ export class DisplayList extends Userdata<"fz_display_list"> {
 		)
 	}
 
-	toStructuredText(options = "") {
-		checkType(options, "string")
+	toStructuredText(options: any) {
+		options = ensureOptions(options)
 		return new StructuredText(libmupdf._wasm_new_stext_page_from_display_list(this.pointer, STRING(options)))
 	}
 
@@ -1330,8 +1336,8 @@ export class DisplayList extends Userdata<"fz_display_list"> {
 		libmupdf._wasm_run_display_list(this.pointer, device.pointer, MATRIX(matrix))
 	}
 
-	search(needle: string, max_hits = 500) {
-		return runSearch(libmupdf._wasm_search_display_list, this.pointer, needle, max_hits)
+	search(needle: string, options: any) {
+		return runSearch(libmupdf._wasm_search_display_list, this.pointer, needle, options)
 	}
 }
 
@@ -1444,8 +1450,8 @@ export class Pixmap extends Userdata<"fz_pixmap"> {
 		}
 	}
 
-	asJPEG(quality: number, invert_cmyk=false) {
-		let buf = libmupdf._wasm_new_buffer_from_pixmap_as_jpeg(this.pointer, quality, invert_cmyk)
+	asJPEG(quality: number, cmyk_method=2) {
+		let buf = libmupdf._wasm_new_buffer_from_pixmap_as_jpeg(this.pointer, quality, cmyk_method)
 		try {
 			return fromBuffer(buf)
 		} finally {
@@ -1633,8 +1639,8 @@ export class StructuredText extends Userdata<"fz_stext_page"> {
 		return result
 	}
 
-	search(needle: string, max_hits = 500) {
-		return runSearch(libmupdf._wasm_search_stext_page, this.pointer, needle, max_hits)
+	search(needle: string, options: any) {
+		return runSearch(libmupdf._wasm_search_stext_page, this.pointer, needle, options)
 	}
 }
 
@@ -1886,7 +1892,8 @@ export class DisplayListDevice extends Device {
 export class DocumentWriter extends Userdata<"fz_document_writer"> {
 	static override readonly _drop = libmupdf._wasm_drop_document_writer
 
-	constructor(buffer: Buffer, format: string, options: string) {
+	constructor(buffer: Buffer, format: string, options: any) {
+		options = ensureOptions(options)
 		super(
 			libmupdf._wasm_new_document_writer_with_buffer(
 				BUFFER(buffer),
@@ -2096,7 +2103,7 @@ export class Document extends Userdata<"any_document"> {
 	}
 
 	isReflowable() {
-		libmupdf._wasm_is_document_reflowable(this.pointer)
+		return !!libmupdf._wasm_is_document_reflowable(this.pointer)
 	}
 
 	style(publisherCSS: boolean, userCSS: string) {
@@ -2374,8 +2381,8 @@ export class Page extends Userdata<"any_page"> {
 		return new DisplayList(result)
 	}
 
-	toStructuredText(options = "") {
-		checkType(options, "string")
+	toStructuredText(options: any) {
+		options = ensureOptions(options)
 		return new StructuredText(libmupdf._wasm_new_stext_page_from_page(this.pointer, STRING(options)))
 	}
 
@@ -2399,8 +2406,8 @@ export class Page extends Userdata<"any_page"> {
 		libmupdf._wasm_delete_link(this.pointer, link.pointer)
 	}
 
-	search(needle: string, max_hits = 500) {
-		return runSearch(libmupdf._wasm_search_page, this.pointer, needle, max_hits)
+	search(needle: string, options: any) {
+		return runSearch(libmupdf._wasm_search_page, this.pointer, needle, options)
 	}
 
 }
@@ -2754,26 +2761,12 @@ export class PDFDocument extends Document {
 		}
 	}
 
-	saveToBuffer(options: string | Record<string,any> = "") {
-		var options_string
-		if (typeof options === "object") {
-			options_string = Object.entries(options).map(kv => {
-				var k: string = kv[0]
-				var v: any = kv[1]
-				if (v === true)
-					return k + "=" + "yes"
-				else if (v === false)
-					return k + "=" + "no"
-				else
-					return k + "=" + String(v).replaceAll(",", ":")
-			}).join(",")
-		} else {
-			options_string = options
-		}
-		return new Buffer(libmupdf._wasm_pdf_write_document_buffer(this.pointer, STRING(options_string)))
+	saveToBuffer(options: any) {
+		options = ensureOptions(options)
+		return new Buffer(libmupdf._wasm_pdf_write_document_buffer(this.pointer, STRING(options)))
 	}
 
-	save(filename: string, options: string | Record<string,any> = "") {
+	save(filename: string, options: any) {
 		if (node_fs)
 			node_fs.writeFileSync(filename, this.saveToBuffer(options).asUint8Array())
 		else
@@ -4169,12 +4162,6 @@ export class PDFWidget extends PDFAnnotation {
 
 /* We need a certain level of ugliness to allow callbacks from C to JS */
 
-declare global {
-	function $libmupdf_stm_close(ptr: number): void
-	function $libmupdf_stm_seek(ptr: number, pos: number, offset: number, whence: number): number
-	function $libmupdf_stm_read(ptr: number, pos: number, addr: number, size: number): number
-}
-
 interface StreamHandle {
 	fileSize(): number,
 	read(memory: Uint8Array, offset: number, length: number, position: number): number,
@@ -4184,7 +4171,7 @@ interface StreamHandle {
 var $libmupdf_stm_id = 0
 var $libmupdf_stm_table: Map<number,StreamHandle> = new Map()
 
-globalThis.$libmupdf_stm_close = function (id: number) {
+libmupdf.$libmupdf_stm_close = function (id: number) {
 	let handle = $libmupdf_stm_table.get(id)
 	if (handle) {
 		handle.close()
@@ -4194,7 +4181,7 @@ globalThis.$libmupdf_stm_close = function (id: number) {
 	throw new Error("invalid file handle")
 }
 
-globalThis.$libmupdf_stm_seek = function (id: number, pos: number, offset: number, whence: number) {
+libmupdf.$libmupdf_stm_seek = function (id: number, pos: number, offset: number, whence: number) {
 	let handle = $libmupdf_stm_table.get(id)
 	if (handle) {
 		if (whence === 0)
@@ -4212,7 +4199,7 @@ globalThis.$libmupdf_stm_seek = function (id: number, pos: number, offset: numbe
 	throw new Error("invalid file handle")
 }
 
-globalThis.$libmupdf_stm_read = function (id: number, pos: number, addr: number, size: number) {
+libmupdf.$libmupdf_stm_read = function (id: number, pos: number, addr: number, size: number) {
 	let handle = $libmupdf_stm_table.get(id)
 	if (handle) {
 		return handle.read(libmupdf.HEAPU8, addr, size, pos)
@@ -4233,11 +4220,7 @@ export class Stream extends Userdata<"fz_stream"> {
 
 var $libmupdf_load_font_file_js: (name: string, script: string, bold: boolean, italic: boolean) => Font | null
 
-declare global {
-	function $libmupdf_load_font_file(name: Pointer<"char">, script: Pointer<"char">, bold: boolean, italic: boolean): Pointer<"fz_font">
-}
-
-globalThis.$libmupdf_load_font_file = function (name, script, bold, italic) {
+libmupdf.$libmupdf_load_font_file = function (name, script, bold, italic) {
 	if ($libmupdf_load_font_file_js) {
 		var font = $libmupdf_load_font_file_js(fromString(name), fromString(script), bold, italic)
 		if (font) {
@@ -4293,13 +4276,7 @@ var $libmupdf_path_table: Map<number,PathWalker> = new Map()
 var $libmupdf_text_id = 0
 var $libmupdf_text_table: Map<number,TextWalker> = new Map()
 
-declare global {
-	var $libmupdf_path_walk: any
-	var $libmupdf_text_walk: any
-	var $libmupdf_device: any
-}
-
-globalThis.$libmupdf_path_walk = {
+libmupdf.$libmupdf_path_walk = {
 	moveto(id: number, x: number, y: number): void {
 		$libmupdf_path_table.get(id)?.moveTo?.(x, y)
 	},
@@ -4316,7 +4293,7 @@ globalThis.$libmupdf_path_walk = {
 
 var $libmupdf_text_font: Font | null = null
 
-globalThis.$libmupdf_text_walk = {
+libmupdf.$libmupdf_text_walk = {
 	begin_span(
 		id: number,
 		font: Pointer<"fz_font">,
@@ -4362,7 +4339,7 @@ globalThis.$libmupdf_text_walk = {
 	},
 }
 
-globalThis.$libmupdf_device = {
+libmupdf.$libmupdf_device = {
 	drop_device(id: number): void {
 		$libmupdf_device_table.get(id)?.drop?.()
 		$libmupdf_device_table.delete(id)

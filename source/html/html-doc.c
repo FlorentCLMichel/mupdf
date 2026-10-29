@@ -22,6 +22,7 @@
 
 #include "mupdf/fitz.h"
 #include "html-imp.h"
+#include "../fitz/fitz-imp.h"
 
 #include <string.h>
 #include <math.h>
@@ -35,7 +36,7 @@ typedef struct
 	fz_html_font_set *set;
 	fz_html *html;
 	fz_outline *outline;
-	const fz_htdoc_format_t *format;
+	const fz_htdoc_format *format;
 	fz_buffer *buf;
 } html_document;
 
@@ -171,10 +172,18 @@ static int
 htdoc_lookup_metadata(fz_context *ctx, fz_document *doc_, const char *key, char *buf, size_t size)
 {
 	html_document *doc = (html_document *)doc_;
+
+	if (doc->html == NULL)
+		fz_ensure_styled(ctx, doc_);
+
 	if (!strcmp(key, FZ_META_FORMAT))
 		return 1 + (int)fz_strlcpy(buf, doc->format->format_name, size);
-	if (!strcmp(key, FZ_META_INFO_TITLE) && doc->html->title)
-		return 1 + (int)fz_strlcpy(buf, doc->html->title, size);
+	if (!strcmp(key, FZ_META_INFO_TITLE) && doc->html->metadata.title)
+		return 1 + (int)fz_strlcpy(buf, doc->html->metadata.title, size);
+	if (!strcmp(key, FZ_META_INFO_AUTHOR) && doc->html->metadata.author)
+		return 1 + (int)fz_strlcpy(buf, doc->html->metadata.author, size);
+	if (!strcmp(key, FZ_META_INFO_SUBJECT) && doc->html->metadata.subject)
+		return 1 + (int)fz_strlcpy(buf, doc->html->metadata.subject, size);
 	return -1;
 }
 
@@ -202,7 +211,7 @@ htdoc_layout(fz_context *ctx, fz_document *doc_)
 }
 
 fz_document *
-fz_htdoc_open_document_with_buffer(fz_context *ctx, fz_archive *dir, fz_buffer *buf, const fz_htdoc_format_t *format)
+fz_htdoc_open_document_with_buffer(fz_context *ctx, fz_archive *dir, fz_buffer *buf, const fz_htdoc_format *format)
 {
 	html_document *doc = NULL;
 
@@ -246,7 +255,7 @@ fz_htdoc_open_document_with_buffer(fz_context *ctx, fz_archive *dir, fz_buffer *
 }
 
 fz_document *
-fz_htdoc_open_document_with_stream_and_dir(fz_context *ctx, fz_stream *stm, fz_archive *dir, const fz_htdoc_format_t *format)
+fz_htdoc_open_document_with_stream_and_dir(fz_context *ctx, fz_stream *stm, fz_archive *dir, const fz_htdoc_format *format)
 {
 	fz_buffer *buf = NULL;
 
@@ -502,7 +511,7 @@ static int htdoc_recognize_html_content(fz_context *ctx, const fz_document_handl
 	return recognize_html_content(ctx, handler, stream, dir, hstate, free_state, 0);
 }
 
-static const fz_htdoc_format_t fz_htdoc_html5 =
+static const fz_htdoc_format fz_htdoc_html5 =
 {
 	"HTML5",
 	NULL,
@@ -541,7 +550,7 @@ fz_document_handler html_document_handler =
 
 /* XHTML document handler */
 
-static const fz_htdoc_format_t fz_htdoc_xhtml =
+static const fz_htdoc_format fz_htdoc_xhtml =
 {
 	"XHTML",
 	NULL,
@@ -584,7 +593,7 @@ fz_document_handler xhtml_document_handler =
 
 /* FB2 document handler */
 
-static const fz_htdoc_format_t fz_htdoc_fb2 =
+static const fz_htdoc_format fz_htdoc_fb2 =
 {
 	"FictionBook2",
 	NULL,
@@ -662,7 +671,7 @@ fz_document_handler fb2_document_handler =
 
 /* Mobi document handler */
 
-static const fz_htdoc_format_t fz_htdoc_mobi =
+static const fz_htdoc_format fz_htdoc_mobi =
 {
 	"MOBI",
 	NULL,

@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2021 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -40,7 +40,9 @@ typedef struct
 	int c, d;
 	unsigned short gid;
 	unsigned char e, f;
-	int aa;
+	uint8_t aa;
+	uint8_t cs;
+	uint16_t pad;
 } fz_glyph_key;
 
 typedef struct fz_glyph_cache_entry
@@ -239,6 +241,7 @@ fz_render_stroked_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix *trm,
 	return fz_render_glyph(ctx, font, gid, trm, model, scissor, 1, aa);
 }
 
+/* Jenkins' one_at_a_time hash */
 static unsigned do_hash(unsigned char *s, int len)
 {
 	unsigned val = 0;
@@ -288,6 +291,7 @@ fz_render_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix *ctm, fz_colo
 	fz_glyph_cache_entry *entry;
 	unsigned hash;
 	int is_ft_font = !!fz_font_ft_face(ctx, font);
+	uint8_t t;
 
 	fz_var(locked);
 	fz_var(caching);
@@ -312,6 +316,12 @@ fz_render_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix *ctm, fz_colo
 		do_cache = 0;
 	}
 
+	t = (uint8_t)(model ? model->type : FZ_COLORSPACE_NONE);
+	/* We might have several different separation or indexed spaces, and
+	 * don't want to confuse different cached versions between them. */
+	if (t == FZ_COLORSPACE_SEPARATION || t == FZ_COLORSPACE_INDEXED)
+		do_cache = 0;
+
 	cache = ctx->glyph_cache;
 
 	key.font = font;
@@ -321,6 +331,8 @@ fz_render_glyph(fz_context *ctx, fz_font *font, int gid, fz_matrix *ctm, fz_colo
 	key.c = subpix_ctm.c * 65536;
 	key.d = subpix_ctm.d * 65536;
 	key.aa = aa;
+	key.cs = t;
+	key.pad = 0;
 
 	hash = do_hash((unsigned char *)&key, sizeof(key)) % GLYPH_HASH_LEN;
 	fz_lock(ctx, FZ_LOCK_GLYPHCACHE);

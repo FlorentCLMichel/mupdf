@@ -526,8 +526,23 @@ Windows only
   * Also see: https://docs.python.org/3/using/windows.html
 
 *
-  Install Visual Studio 2019. Later versions may not work with MuPDF's
-  solution and build files.
+  Install Visual Studio.
+
+*
+  Note that MuPDF's Visual Studio project files specify the 142 tools.
+
+  With Visual Studio 2022 and later these tools may not be installed.
+
+  Possible workarounds are:
+
+  * Install the 142 tools into Visual Studio.
+  * Or build with ``scripts/mupdfwrap.py --vs-upgrade 1 ...``.
+
+    This will create a parallel set of upgraded project files
+    (with devenv's ``/upgrade`` option)
+    and use them in preference to the originals.
+
+    This should allow the build to work.
 
 
 All platforms
@@ -1186,6 +1201,33 @@ is constructed. In this particular case there is no need to hold on to a
 can work.
 
 
+Experimental thread-safety in C++ bindings
+---------------------------------------------------------------
+
+As of 2026-06-01 there is experimental support for automatic thread safety in the generated
+C++ bindings.
+
+Caveats:
+
+* This feature is experimental, and may be drastically changed or even removed.
+* As of 2026-06-01, multi-threaded performance does not seem to be significantly better than single-threaded performance,
+  possibly due to limitations in the font code.
+
+Details:
+
+* A build time option.
+* Not enabled by default.
+* Enabled by specifying a build directory containing ``-locking-``.
+* Disabled at runtime if ``mupdf::reinit_singlethreaded()`` is called.
+* Uses per-document and per-device recursive mutexes.
+* The locking is done inside each generated low-level ``ll_`` C++ function.
+* As of 2026-06-01 we add an optional trailing ``bool fzlocked=false`` argument to each low-level ``ll_`` C++ function.
+  If true, we assume that any required locks are already held and do not attempt to acquire any mutexes.
+  The intention is to allow calling code to acquire any relevent locks itself around multiple calls of MuPDF C++ functions,
+  and avoid continually locking/unlocking inside each of these calls.
+  It is not known yet whether this optimisation is actually significant.
+
+
 Extra functions in C++, Python and C#
 ---------------------------------------------------------------
 
@@ -1458,6 +1500,13 @@ Non-standard API or implementation
         return None
     mupdf.fz_install_load_system_font_funcs(font_f, f_cjk, f_fallback)
 
+Limitations
+~~~~~~~~~~~
+* Due to limitations of swig, where enums are defined with a name,
+  and the name is also a function,
+  the enum values will not be visible.
+
+  For example `pdf_annot_type`.
 
 Making MuPDF function pointers call Python code
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

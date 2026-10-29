@@ -23,15 +23,45 @@
 #ifndef SOURCE_SVG_IMP_H
 #define SOURCE_SVG_IMP_H
 
-typedef struct svg_cycle_list_s svg_cycle_list;
-struct svg_cycle_list_s {
+typedef struct svg_cycle_list svg_cycle_list;
+struct svg_cycle_list {
 	svg_cycle_list *up;
 	fz_xml *symbol;
 };
 
-typedef struct svg_document_s svg_document;
+enum fz_svg_property_name
+{
+	SVG_ATT_FILL,
+	SVG_ATT_FILL_OPACITY,
+	SVG_ATT_FILL_RULE,
+	SVG_ATT_FONT_FAMILY,
+	SVG_ATT_FONT_SIZE,
+	SVG_ATT_FONT_STYLE,
+	SVG_ATT_FONT_WEIGHT,
+	SVG_ATT_HEIGHT,
+	SVG_ATT_OPACITY,
+	SVG_ATT_STOP_COLOR,
+	SVG_ATT_STOP_OPACITY,
+	SVG_ATT_STROKE,
+	SVG_ATT_STROKE_LINECAP,
+	SVG_ATT_STROKE_LINEJOIN,
+	SVG_ATT_STROKE_MITERLIMIT,
+	SVG_ATT_STROKE_OPACITY,
+	SVG_ATT_STROKE_WIDTH,
+	SVG_ATT_TEXT_ANCHOR,
+	SVG_ATT_TRANSFORM,
+	SVG_ATT_WIDTH,
 
-struct svg_document_s
+	SVG_NUM_PROPERTIES
+};
+
+#if SVG_NUM_PROPERTIES > FZ_MAX_CSS_PROPS
+#error "FZ_MAX_CSS_PROPS is too small!"
+#endif
+
+typedef struct svg_document svg_document;
+
+struct svg_document
 {
 	fz_document super;
 	fz_xml_doc *xml;
@@ -44,13 +74,32 @@ struct svg_document_s
 	char base_uri[2048];
 };
 
+typedef enum
+{
+	SVG_MATERIAL_NONE,
+	SVG_MATERIAL_COLOR,
+	SVG_MATERIAL_SHADE
+} svg_material_type;
+
+typedef struct
+{
+	svg_material_type type;
+	union {
+		float color[3];
+		struct
+		{
+			fz_shade *shade;
+			int use_obb;
+		} s;
+	} u;
+} svg_material;
+
+void svg_drop_material(fz_context *ctx, svg_material *mat);
+
 const char *svg_lex_number(float *fp, const char *str);
 float svg_parse_number(const char *str, float min, float max, float inherit);
-float svg_parse_number_from_style(fz_context *ctx, svg_document *doc, const char *string, const char *name, float number);
-int svg_parse_enum_from_style(fz_context *ctx, svg_document *doc, const char *style, const char *att,
-	int ecount, const char *etable[], int value);
-char *svg_parse_string_from_style(fz_context *ctx, svg_document *doc, const char *style, const char *att,
-	char *buf, int buf_size, const char *value);
+
+void svg_apply_css_cascade(fz_context *ctx, fz_pool *pool, fz_css *css, fz_xml *xml);
 
 /*
 	Return length/coordinate in points.
@@ -59,8 +108,8 @@ float svg_parse_length(const char *str, float percent, float font_size);
 float svg_parse_angle(const char *str);
 
 void svg_parse_color_from_style(fz_context *ctx, svg_document *doc, const char *str,
-	int *fill_is_set, float fill[3], int *stroke_is_set, float stroke[3]);
-void svg_parse_color(fz_context *ctx, svg_document *doc, const char *str, float *rgb);
+	svg_material *fill, float *fill_opacity, svg_material *stroke, float *stroke_opacity);
+void svg_parse_color(fz_context *ctx, svg_document *doc, const char *str, svg_material *mat, float *opacity);
 fz_matrix svg_parse_transform(fz_context *ctx, svg_document *doc, const char *str, fz_matrix transform);
 
 int svg_is_whitespace_or_comma(int c);

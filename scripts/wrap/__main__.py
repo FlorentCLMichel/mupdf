@@ -531,7 +531,7 @@ Windows builds:
     Building the DLLs:
 
         We build Windows binaries by running devenv.com directly. We search
-        for this using scripts/wdev.py.
+        for this using pipcl.wdev.
 
         Building _mupdf.pyd is tricky because it needs to be built with a
         specific Python.h and linked with a specific python.lib. This is done
@@ -730,6 +730,30 @@ Usage:
                 -d build/shared-debug
                 -d build/shared-release [default]
 
+            <directory> sets various flags based on splitting by '-':
+                x32 set word size (windows only).
+                x64 set word size (windows only).
+                py<version> set python version (windows only).
+                Py_LIMITED_API_0x<MMmmpppp>:
+                    Build for python limited api by predefining Py_LIMITED_API
+                    to 0x<MMmmpppp>. For example `Py_LIMITED_API_0x030b0000`
+                    compiles with '-D Py_LIMITED_API=0x030b0000' which builds
+                    for the python-3.11 limited api.
+                bsymbolic:
+                    Set XLIB_LDFLAGS=-Wl,-Bsymbolic.
+                debug release memento
+                    Sets build flags.
+                locking:
+                    Do a thread-safe build of the C++ wrappers.
+                nogil:
+                    Make the Python bindings claim that they are threadsafe and
+                    do not need Python's GIL.
+                shared:
+                    Build shared library.
+                tesseract:
+                    Build tesseract.
+            Other flags are ignored.
+
             Windows specifics:
 
                 On Windows we support building for specific cpus and python
@@ -901,7 +925,10 @@ Usage:
         ./scripts/mupdfwrap.py --venv -b all -t
             Build and test on Windows.
 
+Environment variables:
 
+    MUPDF_WRAP_USE_VENV
+        If '0', we do not re-run ourselves in a venv.
 '''
 
 import glob
@@ -912,10 +939,38 @@ import platform
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import sysconfig
 import tempfile
 import textwrap
+
+
+MUPDF_WRAP_USE_VENV = os.environ.get('MUPDF_WRAP_USE_VENV')
+if MUPDF_WRAP_USE_VENV == '0':
+    # Don't use a venv.
+    pass
+else:
+    sys.path.insert(0, os.path.normpath(f'{__file__}/../..'))
+    try:
+        import autovenv
+    finally:
+        del sys.path[0]
+    autovenv.enter(
+            venv_prefix='build/mupdfwrap-autovenv',
+            packages='libclang',
+            )
+
+# Install/import pipcl. We don't pass 'pipcl' to above call to autovenv.enter()
+# because this would do `pip install pipcl`, which seems to fail if we are
+# being run via `pip install`. It looks like `pip install` deliberately does
+# not install pip in a build venv.
+#
+try:
+    import pipcl
+except ImportError:
+    subprocess.run(f'pip install --upgrade pipcl', shell=1, check=1)
+    import pipcl
 
 if platform.system() == 'Windows':
     '''
@@ -938,8 +993,6 @@ except ModuleNotFoundError:
     resource = None
 
 import jlib
-import pipcl
-import wdev
 
 from . import classes
 from . import cpp
@@ -1289,8 +1342,8 @@ def build_0(
 
     # On 32-bit Windows, libclang doesn't work. So we attempt to run 64-bit `-b
     # 0` to generate C++ code.
-    jlib.log1( '{state.state_.windows=} {build_dirs.cpu.bits=}')
     if state.state_.windows and build_dirs.cpu.bits == 32:
+        jlib.log1( '{state.state_.windows=} {build_dirs.cpu.bits=}')
         try:
             jlib.log( 'Windows 32-bit: trying dummy call of clang.cindex.Index.create()')
             state.clang.cindex.Index.create()
@@ -1319,6 +1372,7 @@ def build_0(
             refcheck_if,
             trace_if,
             'debug' in build_dirs.dir_so,
+            build_dirs.locking,
             )
 
     generated.save(f'{build_dirs.dir_mupdf}/platform/c++')
@@ -1405,7 +1459,7 @@ def build_so_windows(
     if isinstance(libs, str):       libs = libs,
     if isinstance(libpaths, str):   libpaths = libpaths,
     if vs is None:
-        vs = wdev.WindowsVS()
+        vs = pipcl.wdev.windows_vs()
     path_cpp_rel = os.path.relpath(path_cpp)
     path_o = f'{path_cpp}.o'
     # Compile.
@@ -1523,7 +1577,10 @@ def build( build_dirs, swig_command, args, vs_upgrade, make_command):
     devenv = 'devenv.com'
     if state.state_.windows:
         # Search for devenv.com in standard locations.
-        windows_vs = wdev.WindowsVS(cpu=wdev.WindowsCpu(build_dirs.cpu.name))
+        # 2026-07-10: Fixme: pipcl-12's pipcl.wdev.windows_vs() is
+        # missing <cpu> arg so we use pipcl.wdev.WindowsVS(). Change to
+        # pipcl.wdev.windows_vs() after pipcl-13 is released.
+        windows_vs = pipcl.wdev.WindowsVS(cpu=pipcl.wdev.WindowsCpu(build_dirs.cpu.name))
         devenv = windows_vs.devenv
 
     #jlib.log('{build_dirs.dir_so=}')
@@ -1905,10 +1962,9 @@ def build( build_dirs, swig_command, args, vs_upgrade, make_command):
 
                 if state.state_.windows:
 
-                    libdir = f'{build_dirs.dir_mupdf}/platform/win32/'
-                    mupdfcpp_lib = f'{build_dirs.dir_mupdf}/platform/win32/'
-                    if build_dirs.cpu.bits == 64:
-                        libdir += 'x64/'
+                    libdir = f'{build_dirs.dir_mupdf}/platform/{win32_infix}/'
+                    mupdfcpp_lib = f'{build_dirs.dir_mupdf}/platform/{win32_infix}/'
+                    libdir += build_dirs.cpu.windows_subdir
                     libdir += 'Debug/' if debug else 'Memento/' if memento else 'Release/'
                     libs = list()
                     libs.append(libdir + ('mupdfcpp64.lib' if build_dirs.cpu.bits == 64 else 'mupdfcpp.lib'))
@@ -1916,7 +1972,7 @@ def build( build_dirs, swig_command, args, vs_upgrade, make_command):
                         libs.append(libdir + 'libmupdf.lib')
 
                     if build_python:
-                        wp = wdev.WindowsPython(build_dirs.cpu, build_dirs.python_version)
+                        wp = pipcl.wdev.WindowsPython(build_dirs.cpu, build_dirs.python_version)
                         jlib.log( '{wp=}:')
                         if 0:
                             # Show contents of include directory.
@@ -2273,7 +2329,7 @@ def python_settings(build_dirs, startdir=None):
         # python. Also, Windows appears to be able to find
         # _mupdf.pyd in same directory as mupdf.py.
         #
-        wp = wdev.WindowsPython(build_dirs.cpu, build_dirs.python_version)
+        wp = pipcl.wdev.WindowsPython(build_dirs.cpu, build_dirs.python_version)
         python_path = wp.path.replace('\\', '/')    # Allows use on Cygwin.
         command_prefix = f'"{python_path}"'
     else:
@@ -2789,6 +2845,107 @@ def main2():
                     jlib.log(f'Copying {from_=} to {destination=}.')
                     shutil.copytree(from_, destination, dirs_exist_ok=True)
 
+            elif arg in (
+                    '--test-cpp-threads',
+                    '--test-cpp',
+                    '--test-cpp-threads-performance',
+                    '--test-cpp-threads-hotspot',
+                    ):
+                if arg == '--test-cpp-threads':
+                    cpp = os.path.abspath( f'{__file__}/../../../scripts/mupdfwrap_test_threads.cpp')
+                    exe = f'{cpp}.exe'
+                    run_command = exe
+                elif arg in ('--test-cpp-threads-performance', '--test-cpp-threads-hotspot'):
+                    cpp = os.path.abspath( f'{__file__}/../../../scripts/mupdfwrap_test_threads_performance.cpp')
+                    exe = f'{cpp}.exe'
+                    run_command = exe
+                else:
+                    cpp = f'{build_dirs.dir_mupdf}/scripts/mupdfwrap_test.cpp'
+                    exe = f'{cpp}.exe'
+                    testfile = os.path.abspath( f'{__file__}/../../../thirdparty/zlib/zlib.3.pdf')
+                    testfile = testfile.replace('\\', '/')
+                    run_command = f'{exe} {testfile}'
+
+                includes = (
+                        f' -I {build_dirs.dir_mupdf}/include'
+                        f' -I {build_dirs.dir_mupdf}/platform/c++/include'
+                        )
+                env_extra = None
+                cpp_flags = build_dirs.cpp_flags
+                if state.state_.windows:
+                    win32_infix = _windows_vs_upgrade( vs_upgrade, build_dirs, devenv=None)
+                    windows_build_type = build_dirs.windows_build_type()
+                    lib = f'{build_dirs.dir_mupdf}/platform/{win32_infix}/{build_dirs.cpu.windows_subdir}{windows_build_type}/mupdfcpp{build_dirs.cpu.windows_suffix}.lib'
+                    vs = wdev.WindowsVS()
+                    command = textwrap.dedent(f'''
+                            "{vs.vcvars}"&&"{vs.cl}"
+                                /Tp{cpp}
+                                {includes}
+                                -D FZ_DLL_CLIENT
+                                {cpp_flags}
+                                /link
+                                {lib}
+                                /out:{exe}
+                            ''')
+                    jlib.system(command, verbose=1)
+                    path = os.environ.get('PATH')
+                    env_extra = dict(PATH = f'{build_dirs.dir_so}{os.pathsep}{path}' if path else build_dirs.dir_so)
+                    #jlib.system(run_command, verbose=1, env_extra=env_extra)
+                else:
+                    dir_so_flags = os.path.basename( build_dirs.dir_so).split( '-')
+                    if 'shared' in dir_so_flags:
+                        libmupdf        = f'{build_dirs.dir_so}/libmupdf.so'
+                        libmupdfthird   = f''
+                        libmupdfcpp     = f'{build_dirs.dir_so}/libmupdfcpp.so'
+                    elif 'fpic' in dir_so_flags:
+                        libmupdf        = f'{build_dirs.dir_so}/libmupdf.a'
+                        libmupdfthird   = f'{build_dirs.dir_so}/libmupdf-third.a'
+                        libmupdfcpp     = f'{build_dirs.dir_so}/libmupdfcpp.a'
+                    else:
+                        assert 0, f'Leaf must start with "shared-" or "fpic-": build_dirs.dir_so={build_dirs.dir_so}'
+                    command = textwrap.dedent(f'''
+                            c++
+                                {'-std=c++14' if state.state_.macos else ''}
+                                -o {exe}
+                                -g
+                                {cpp_flags}
+                                {includes}
+                                {cpp}
+                                {link_l_flags( [libmupdf, libmupdfcpp])}
+                            ''')
+                    jlib.system(command, verbose=1)
+                    jlib.system( 'pwd', verbose=1)
+                    if state.state_.macos:
+                        run_command = f'DYLD_LIBRARY_PATH={build_dirs.dir_so} {run_command}'
+                        #jlib.system(run_command, verbose=1)
+                    else:
+                        run_command = f'LD_LIBRARY_PATH={build_dirs.dir_so} {run_command}'
+
+                if arg == '--test-cpp-threads-hotspot':
+                    assert platform.system() == 'Linux'
+                    env_extra = f'LD_LIBRARY_PATH={build_dirs.dir_so}'
+                    if 0:
+                        jlib.system(f'sudo {env_extra} perf record -e cycles -e sched:sched_switch --switch-events --sample-cpu -m 8M --aio --call-graph dwarf {exe}', verbose=1)
+                        jlib.log(f'top-left: menu cycles, sched:sched_switch, off-CPU Time.')
+                        jlib.system(f'sudo hotspot', verbose=1)
+                    else:
+                        jlib.log(f'Run:')
+                        jlib.log(f'    sudo {env_extra} perf record -e cycles -e sched:sched_switch --switch-events --sample-cpu -m 8M --aio --call-graph dwarf {exe}')
+                        jlib.log(f'    sudo hotspot')
+                        jlib.log(f'In top-left: menu cycles, sched:sched_switch, off-CPU Time.')
+                        jlib.log(f'Also see: https://github.com/KDAB/hotspot/#off-cpu-profiling')
+
+                else:
+                    e_locks = jlib.system( f'{run_command}', verbose=1, env_extra=env_extra, raise_errors=0)
+                    print(f'{e_locks=}')
+                    if arg != '--test-cpp-threads-performance':
+                        e_nolocks = jlib.system( f'{run_command} -l', verbose=1, env_extra=env_extra, raise_errors=0)
+                        e_singlectx_nolocks = jlib.system( f'{run_command} -t -l', verbose=1, env_extra=env_extra, raise_errors=0)
+                        e_singlectx_locks = jlib.system( f'{run_command} -t -L', verbose=1, env_extra=env_extra, raise_errors=0)
+                        print(f'{e_nolocks=}')
+                        print(f'{e_singlectx_nolocks=}')
+                        print(f'{e_singlectx_locks=}')
+
             elif arg == '--test-cpp':
                 testfile = os.path.abspath( f'{__file__}/../../../thirdparty/zlib/zlib.3.pdf')
                 testfile = testfile.replace('\\', '/')
@@ -2803,7 +2960,7 @@ def main2():
                     win32_infix = _windows_vs_upgrade( vs_upgrade, build_dirs, devenv=None)
                     windows_build_type = build_dirs.windows_build_type()
                     lib = f'{build_dirs.dir_mupdf}/platform/{win32_infix}/{build_dirs.cpu.windows_subdir}{windows_build_type}/mupdfcpp{build_dirs.cpu.windows_suffix}.lib'
-                    vs = wdev.WindowsVS()
+                    vs = pipcl.wdev.windows_vs()
                     command = textwrap.dedent(f'''
                             "{vs.vcvars}"&&"{vs.cl}"
                                 /Tp{src}
@@ -2912,10 +3069,13 @@ def main2():
                 if 1:
                     # Build and run simple test.
                     out = 'test-csharp.exe'
+                    plat = ''
+                    if state.state_.windows and build_dirs.cpu.name == 'x32':
+                        plat = ' -platform:x86'
                     jlib.build(
                             (f'{build_dirs.dir_mupdf}/scripts/mupdfwrap_test.cs', mupdf_cs),
                             out,
-                            f'"{csc}"{" -platform:x86" if build_dirs.cpu.name == "x32" else ""} -out:{{OUT}} {{IN}}',
+                            f'"{csc}"{plat} -out:{{OUT}} {{IN}}',
                             )
                     if state.state_.windows:
                         out_rel = os.path.relpath( out, build_dirs.dir_so)
@@ -2933,10 +3093,12 @@ def main2():
                 if 1:
                     # Build and run test using minimal swig library to test
                     # handling of Unicode strings.
-                    swig.test_swig_csharp_unicode(x32 = build_dirs.cpu.name == 'x32')
+                    x32 = state.cpu_name() == 'x32'
+                    swig.test_swig_csharp_unicode(x32=x32)
 
             elif arg == '--test-csharp-exceptions':
-                swig.test_swig_charp_exceptions(x32 = build_dirs.cpu.name == 'x32')
+                x32 = state.cpu_name() == 'x32'
+                swig.test_swig_charp_exceptions(x32=x32)
 
             elif arg == '--test-csharp-gui':
                 csc, mono, mupdf_cs = csharp.csharp_settings(build_dirs)
@@ -3046,7 +3208,7 @@ def main2():
             elif arg in ('--venv' '--venv-force-reinstall'):
                 force_reinstall = ' --force-reinstall' if arg == '--venv-force-reinstall' else ''
                 assert venv_arg_i == 1, f'If specified, {arg} should be the first argument. {venv_arg_i=}'
-                venv = f'venv-mupdfwrap-{state.python_version()}-{state.cpu_name()}'
+                venv = f'build/mupdfwrap-venv-{state.python_version()}-{state.cpu_name()}'
                 # Oddly, shlex.quote(sys.executable), which puts the name
                 # inside single quotes, doesn't work - we get error `The
                 # filename, directory name, or volume label syntax is
@@ -3058,7 +3220,7 @@ def main2():
                     jlib.system(f'"{sys.executable}" -m venv {venv}', out='log', verbose=1)
 
                 if state.state_.windows:
-                    command_venv_enter = f'{venv}\\Scripts\\activate.bat'
+                    command_venv_enter = f'"{venv}\\Scripts\\activate.bat"'
                 else:
                     command_venv_enter = f'. {venv}/bin/activate'
 

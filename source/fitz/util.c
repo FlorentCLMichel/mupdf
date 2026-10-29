@@ -843,6 +843,7 @@ fz_write_image_as_data_uri(fz_context *ctx, fz_output *out, fz_image *image)
 {
 	fz_compressed_buffer *cbuf;
 	fz_buffer *buf;
+	const char *mime;
 
 	cbuf = fz_compressed_image_buffer(ctx, image);
 
@@ -863,10 +864,21 @@ fz_write_image_as_data_uri(fz_context *ctx, fz_output *out, fz_image *image)
 		return;
 	}
 
-	buf = fz_new_buffer_from_image_as_png(ctx, image, fz_default_color_params);
+	if (fz_is_lossy_image(ctx, image))
+	{
+		/* Convert lossy image formats to JPEG */
+		buf = fz_new_buffer_from_image_as_jpeg(ctx, image, fz_default_color_params, 90, FZ_CMYK_JPEG_TO_RGB);
+		mime = "data:image/jpeg;base64,";
+	}
+	else
+	{
+		buf = fz_new_buffer_from_image_as_png(ctx, image, fz_default_color_params);
+		mime = "data:image/png;base64,";
+	}
+
 	fz_try(ctx)
 	{
-		fz_write_string(ctx, out, "data:image/png;base64,");
+		fz_write_string(ctx, out, mime);
 		fz_write_base64_buffer(ctx, out, buf, 1);
 	}
 	fz_always(ctx)
@@ -1025,6 +1037,31 @@ fz_sanitize_jpeg_buffer(fz_context *ctx, fz_buffer *in)
 	return out;
 }
 
+fz_buffer *
+fz_parse_data_uri_with_media_type(fz_context *ctx, const char *uri, const char *accept_mimetype)
+{
+	const char *p = uri;
+	char *data = NULL;
+	if (strncmp(p, "data:", 5))
+		return NULL;
+	p += 5;
+	if (strncmp(p, accept_mimetype, strlen(accept_mimetype)))
+		return NULL;
+	p += strlen(accept_mimetype);
+	while (*p)
+	{
+		if (!strncmp(p, ";base64,", 8))
+			return fz_new_buffer_from_base64(ctx, p+8, 0);
+		if (*p == ',')
+		{
+			data = fz_decode_uri_component(ctx, p+1);
+			return fz_new_buffer_from_data(ctx, (unsigned char*)data, strlen(p));
+		}
+		++p;
+	}
+	return NULL;
+}
+
 void
 fz_append_image_as_data_uri(fz_context *ctx, fz_buffer *out, fz_image *image)
 {
@@ -1061,7 +1098,7 @@ fz_append_image_as_data_uri(fz_context *ctx, fz_buffer *out, fz_image *image)
 	if (fz_is_lossy_image(ctx, image))
 	{
 		/* Convert lossy image formats to JPEG */
-		buf = fz_new_buffer_from_image_as_jpeg(ctx, image, fz_default_color_params, 90, 0);
+		buf = fz_new_buffer_from_image_as_jpeg(ctx, image, fz_default_color_params, 90, FZ_CMYK_JPEG_TO_RGB);
 		mime = "data:image/jpeg;base64,";
 	}
 	else

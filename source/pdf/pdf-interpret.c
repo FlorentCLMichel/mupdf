@@ -492,9 +492,9 @@ pdf_default_op_k(fz_context *ctx, pdf_processor *proc, float c, float m, float y
 }
 
 static void
-pdf_default_op_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace_name)
+pdf_default_op_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace_name, int cs_is_inline)
 {
-	PASSON(op_BI)(ctx, proc->chain, image, colorspace_name);
+	PASSON(op_BI)(ctx, proc->chain, image, colorspace_name, cs_is_inline);
 }
 
 static void
@@ -802,7 +802,7 @@ pdf_try_load_font(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rdb, p
 }
 
 static fz_image *
-parse_inline_image(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_stream *stm, char *csname, int cslen)
+parse_inline_image(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_stream *stm, char *csname, int cslen, int *cs_is_inline)
 {
 	pdf_document *doc = csi->doc;
 	pdf_obj *obj = NULL;
@@ -813,6 +813,7 @@ parse_inline_image(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_stream
 	fz_var(obj);
 	fz_var(img);
 
+	*cs_is_inline = 0;
 	fz_try(ctx)
 	{
 		obj = pdf_parse_dict(ctx, doc, stm, &doc->lexbuf.base);
@@ -820,8 +821,19 @@ parse_inline_image(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_stream
 		if (csname)
 		{
 			cs = pdf_dict_get(ctx, obj, PDF_NAME(CS));
-			if (!pdf_is_indirect(ctx, cs) && pdf_is_name(ctx, cs))
+			if (pdf_is_indirect(ctx, cs))
+			{
+				/* Indirect references are NOT allowed within a BI. */
+				csname[0] = 0;
+			}
+			else if (pdf_is_name(ctx, cs))
 				fz_strlcpy(csname, pdf_to_name(ctx, cs), cslen);
+			else if (pdf_is_array(ctx, cs))
+			{
+				/* We might have [ /Indexed base hival lookup ] */
+				fz_strlcpy(csname, pdf_to_name(ctx, pdf_array_get(ctx, cs, 1)), cslen);
+				*cs_is_inline = 1;
+			}
 			else
 				csname[0] = 0;
 		}
@@ -919,7 +931,7 @@ pdf_process_extgstate(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, pdf_ob
 		else
 			font = pdf_load_hail_mary_font(ctx, csi->doc);
 		fz_try(ctx)
-			proc->op_Tf(ctx, proc, "ExtGState", font, pdf_to_real(ctx, font_size));
+			proc->op_Tf(ctx, proc, NULL, font, pdf_to_real(ctx, font_size));
 		fz_always(ctx)
 			pdf_drop_font(ctx, font);
 		fz_catch(ctx)
@@ -1477,11 +1489,12 @@ pdf_process_keyword(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_strea
 	/* shadings, images, xobjects */
 	case B('B','I'):
 		{
-			fz_image *img = parse_inline_image(ctx, proc, csi, stm, csname, sizeof csname);
+			int cs_is_inline;
+			fz_image *img = parse_inline_image(ctx, proc, csi, stm, csname, sizeof csname, &cs_is_inline);
 			fz_try(ctx)
 			{
 				if (proc->op_BI)
-					proc->op_BI(ctx, proc, img, csname[0] ? csname : NULL);
+					proc->op_BI(ctx, proc, img, csname[0] ? csname : NULL, cs_is_inline);
 			}
 			fz_always(ctx)
 				fz_drop_image(ctx, img);
@@ -1595,6 +1608,7 @@ pdf_process_stream(fz_context *ctx, pdf_processor *proc, pdf_csi *csi, fz_stream
 									csi->stack[0] = pdf_to_real(ctx, o);
 									pdf_array_delete(ctx, csi->obj, n-1);
 									pdf_process_keyword(ctx, proc, csi, stm, buf->scratch);
+									break; /* keep parsing the rest of the array */
 								}
 							}
 						}
@@ -2011,7 +2025,10 @@ void
 pdf_tos_accumulate_clip(fz_context *ctx, pdf_text_object_state *tos)
 {
 	if (tos->clip_text == NULL)
+	{
 		tos->clip_text = fz_new_text(ctx);
+		tos->clip_text_bbox = fz_empty_rect;
+	}
 }
 
 int
@@ -2059,6 +2076,8 @@ void
 pdf_tos_move_after_char(fz_context *ctx, pdf_text_object_state *tos)
 {
 	tos->text_bbox = fz_union_rect(tos->text_bbox, tos->char_bbox);
+	if (tos->clip_text)
+		tos->clip_text_bbox = fz_union_rect(tos->clip_text_bbox, tos->char_bbox);
 	tos->tm = fz_pre_translate(tos->tm, tos->char_tx, tos->char_ty);
 }
 

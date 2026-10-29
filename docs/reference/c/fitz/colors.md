@@ -18,7 +18,7 @@ Separation, DeviceN, and ICC based colorspaces.
 		FZ_COLORSPACE_SEPARATION,
 	};
 
-	struct fz_colorspace_s {
+	struct fz_colorspace {
 		enum fz_colorspace_type type;
 		int n;
 		char *name;

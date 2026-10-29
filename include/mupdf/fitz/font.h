@@ -69,13 +69,13 @@ typedef struct fz_text_decoder fz_text_decoder;
 
 struct fz_text_decoder {
 	// get maximum size estimate of converted text (fast)
-	int (*decode_bound)(fz_text_decoder *dec, unsigned char *input, int n);
+	size_t (*decode_bound)(fz_text_decoder *dec, unsigned char *input, size_t n);
 
 	// get exact size of converted text (slow)
-	int (*decode_size)(fz_text_decoder *dec, unsigned char *input, int n);
+	size_t (*decode_size)(fz_text_decoder *dec, unsigned char *input, size_t n);
 
 	// convert text into output buffer
-	void (*decode)(fz_text_decoder *dec, char *output, unsigned char *input, int n);
+	void (*decode)(fz_text_decoder *dec, char *output, unsigned char *input, size_t n);
 
 	// for internal use only; do not touch!
 	void *table1;
@@ -135,13 +135,13 @@ void *fz_font_ft_face(fz_context *ctx, fz_font *font);
 fz_buffer **fz_font_t3_procs(fz_context *ctx, fz_font *font);
 
 /* common CJK font collections */
-enum { FZ_ADOBE_CNS, FZ_ADOBE_GB, FZ_ADOBE_JAPAN, FZ_ADOBE_KOREA };
+enum fz_adobe_cjk_collection { FZ_ADOBE_CNS, FZ_ADOBE_GB, FZ_ADOBE_JAPAN, FZ_ADOBE_KOREA };
 
 /**
 	Every fz_font carries a set of flags
 	within it, in a fz_font_flags_t structure.
 */
-typedef struct
+typedef struct fz_font_flags_t
 {
 	unsigned int is_mono : 1;
 	unsigned int is_serif : 1;
@@ -182,11 +182,11 @@ fz_font_flags_t *fz_font_flags(fz_font *font);
 	first required and the destructor is called when the fz_font is
 	destroyed.
 */
-typedef struct
+typedef struct fz_shaper_data
 {
 	void *shaper_handle;
 	void (*destroy)(fz_context *ctx, void *); /* Destructor for shape_handle */
-} fz_shaper_data_t;
+} fz_shaper_data;
 
 /**
 	Retrieve a pointer to the shaper data
@@ -197,7 +197,7 @@ typedef struct
 	Returns a pointer to the shaper data structure (or NULL if
 	font is NULL).
 */
-fz_shaper_data_t *fz_font_shaper_data(fz_context *ctx, fz_font *font);
+fz_shaper_data *fz_font_shaper_data(fz_context *ctx, fz_font *font);
 
 /**
 	Retrieve a pointer to the name of the font.
@@ -397,6 +397,16 @@ const unsigned char *fz_lookup_cjk_font_by_language(fz_context *ctx, const char 
 int fz_lookup_cjk_ordering_by_language(const char *name);
 
 /**
+	Attributes for a font.
+*/
+enum
+{
+	FZ_FONT_ATTR_BOLD = 1,
+	FZ_FONT_ATTR_ITALIC = 2,
+	FZ_FONT_ATTR_SERIF = 4,
+};
+
+/**
 	Search the builtin noto fonts for a match.
 	Whether a font is present or not will depend on the
 	configuration in which MuPDF is built.
@@ -408,9 +418,18 @@ int fz_lookup_cjk_ordering_by_language(const char *name);
 	len: Pointer to a place to receive the length of the discovered
 	font buffer.
 
+	subfont: Pointer to a place to receive the subfont number, or
+	NULL.
+
+	attr: Pointer to a place to receive the font attributes, or
+	NULL.
+
+	index: Pointer to a place to receive the index of the found
+	found within the inbuilt table.
+
 	Returns a pointer to the font file data, or NULL if not present.
 */
-const unsigned char *fz_lookup_noto_font(fz_context *ctx, int script, int lang, int *len, int *subfont);
+const unsigned char *fz_lookup_noto_font(fz_context *ctx, int script, int lang, int *len, int *subfont, int *attr, int *index);
 
 /**
 	Search the builtin noto fonts specific symbol fonts.
@@ -762,7 +781,7 @@ void fz_enumerate_font_cmap(fz_context *ctx, fz_font *font, fz_cmap_callback *cb
 */
 void fz_calculate_font_ascender_descender(fz_context *ctx, fz_font *font);
 
-typedef enum
+typedef enum fz_ascdesc_source
 {
 	FZ_ASCDESC_FROM_FONT,
 	FZ_ASCDESC_DEFAULT,
@@ -782,7 +801,7 @@ struct fz_font
 	fz_font_flags_t flags;
 
 	void *ft_face; /* has an FT_Face if used */
-	fz_shaper_data_t shaper_data;
+	fz_shaper_data shaper_data;
 
 	fz_matrix t3matrix;
 	void *t3resources;

@@ -33,10 +33,17 @@
 #include "mupdf/fitz/image.h"
 #include "mupdf/fitz/writer.h"
 
+enum fz_cmyk_jpeg_method
+{
+	FZ_CMYK_JPEG_NON_INVERTED,
+	FZ_CMYK_JPEG_INVERTED,
+	FZ_CMYK_JPEG_TO_RGB
+};
+
 /**
 	PCL output
 */
-typedef struct
+typedef struct fz_pcl_options
 {
 	/* Features of a particular printer */
 	int features;
@@ -137,7 +144,7 @@ void fz_save_pixmap_as_pcl(fz_context *ctx, fz_pixmap *pixmap, char *filename, i
 /**
 	PCLm output
 */
-typedef struct
+typedef struct fz_pclm_options
 {
 	int compress;
 	int strip_height;
@@ -177,7 +184,7 @@ void fz_save_pixmap_as_pclm(fz_context *ctx, fz_pixmap *pixmap, const char *file
 /**
 	PDFOCR output
 */
-typedef struct
+typedef struct fz_pdfocr_options
 {
 	int compress;
 	int strip_height;
@@ -287,7 +294,7 @@ fz_buffer *fz_new_buffer_from_image_as_pkm(fz_context *ctx, fz_image *image, fz_
 fz_buffer *fz_new_buffer_from_image_as_pnm(fz_context *ctx, fz_image *image, fz_color_params color_params);
 fz_buffer *fz_new_buffer_from_image_as_pam(fz_context *ctx, fz_image *image, fz_color_params color_params);
 fz_buffer *fz_new_buffer_from_image_as_psd(fz_context *ctx, fz_image *image, fz_color_params color_params);
-fz_buffer *fz_new_buffer_from_image_as_jpeg(fz_context *ctx, fz_image *image, fz_color_params color_params, int quality, int invert_cmyk);
+fz_buffer *fz_new_buffer_from_image_as_jpeg(fz_context *ctx, fz_image *image, fz_color_params color_params, int quality, enum fz_cmyk_jpeg_method cmyk_method);
 fz_buffer *fz_new_buffer_from_image_as_jpx(fz_context *ctx, fz_image *image, fz_color_params color_params, int quality);
 
 /**
@@ -301,7 +308,7 @@ fz_buffer *fz_new_buffer_from_pixmap_as_pkm(fz_context *ctx, fz_pixmap *pixmap, 
 fz_buffer *fz_new_buffer_from_pixmap_as_pnm(fz_context *ctx, fz_pixmap *pixmap, fz_color_params color_params);
 fz_buffer *fz_new_buffer_from_pixmap_as_pam(fz_context *ctx, fz_pixmap *pixmap, fz_color_params color_params);
 fz_buffer *fz_new_buffer_from_pixmap_as_psd(fz_context *ctx, fz_pixmap *pix, fz_color_params color_params);
-fz_buffer *fz_new_buffer_from_pixmap_as_jpeg(fz_context *ctx, fz_pixmap *pixmap, fz_color_params color_params, int quality, int invert_cmyk);
+fz_buffer *fz_new_buffer_from_pixmap_as_jpeg(fz_context *ctx, fz_pixmap *pixmap, fz_color_params color_params, int quality, enum fz_cmyk_jpeg_method cmyk_method);
 fz_buffer *fz_new_buffer_from_pixmap_as_jpx(fz_context *ctx, fz_pixmap *pix, fz_color_params color_params, int quality);
 
 /**
@@ -421,7 +428,7 @@ void fz_write_pixmap_as_psd(fz_context *ctx, fz_output *out, const fz_pixmap *pi
 */
 fz_band_writer *fz_new_psd_band_writer(fz_context *ctx, fz_output *out);
 
-typedef struct
+typedef struct fz_pwg_options
 {
 	/* These are not interpreted as CStrings by the writing code,
 	 * but are rather copied directly out. */

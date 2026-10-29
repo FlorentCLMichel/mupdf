@@ -26,7 +26,7 @@
 
 #include <limits.h>
 
-typedef struct ps_band_writer_s
+typedef struct ps_band_writer
 {
 	fz_band_writer super;
 	z_stream stream;

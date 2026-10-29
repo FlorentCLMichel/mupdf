@@ -1,4 +1,4 @@
-// Copyright (C) 2004-2025 Artifex Software, Inc.
+// Copyright (C) 2004-2026 Artifex Software, Inc.
 //
 // This file is part of MuPDF.
 //
@@ -32,7 +32,7 @@
 
 #define FZ_XML_MAX_DEPTH 4096
 
-/* #define FZ_XML_SEQ */
+//#define FZ_XML_SEQ
 
 static const struct { const char *name; int c; } html_entities[] = {
 	{"nbsp",160}, {"iexcl",161}, {"cent",162}, {"pound",163},
@@ -167,7 +167,7 @@ void fz_output_xml(fz_context *ctx, fz_output *out, fz_xml *item, int level)
 		}
 		fz_write_byte(ctx, out, '"');
 #ifdef FZ_XML_SEQ
-		fz_write_printf(ctx, out, " <%d>", item->seq);
+		fz_write_printf(ctx, out, " <%d>", item->u.node.seq);
 #endif
 		fz_write_byte(ctx, out, '\n');
 	}
@@ -957,8 +957,12 @@ static char *convert_to_utf8(fz_context *ctx, unsigned char *s, size_t n, int *d
 	const char *enc;
 	const unsigned char *e = s + n;
 	char *dst, *d;
-	int m;
+	size_t m;
 	int c;
+
+	// limit input size to 256MB to prevent 32-bit integer overflow (and other shenanigans)
+	if (n > (1<<30)/FZ_UTFMAX)
+		fz_throw(ctx, FZ_ERROR_LIMIT, "text too large");
 
 	if (s[0] == 0xFE && s[1] == 0xFF) {
 		s += 2;
@@ -991,7 +995,7 @@ static char *convert_to_utf8(fz_context *ctx, unsigned char *s, size_t n, int *d
 	{
 		fz_init_text_decoder(ctx, &dec, enc);
 		// NOTE: use decode_size if memory is more important than speed
-		m = (int)dec.decode_bound(&dec, s, (int)n);
+		m = dec.decode_bound(&dec, s, n);
 		dst = Memento_label(fz_malloc(ctx, m), "utf8");
 		dec.decode(&dec, dst, s, (int)n);
 		*dofree = 1;
@@ -1202,6 +1206,10 @@ static void xml_from_gumbo(fz_context *ctx, struct parser *parser, GumboNode *no
 	case GUMBO_NODE_DOCUMENT:
 	case GUMBO_NODE_COMMENT:
 	case GUMBO_NODE_TEMPLATE:
+	/* use default to cater for the recent addition of
+	 * GUMBO_NODE_PROCESSING_INSTRUCTION in new versions.
+	 * This allows both old and new versions to build safely. */
+	default:
 		break;
 	}
 }
@@ -1427,4 +1435,17 @@ char *fz_new_text_from_xml(fz_context *ctx, fz_xml *root)
 	}
 	s[i] = 0;
 	return s;
+}
+
+fz_pool *fz_xml_pool(fz_xml *xml)
+{
+	if (xml == NULL)
+		return NULL;
+
+	/* If we've been given a node mid-tree, run up to the root to find
+	 * the doc node. */
+	while (xml->up)
+		xml = xml->up;
+
+	return xml->u.doc.pool;
 }

@@ -23,7 +23,9 @@
 #include "mupdf/fitz.h"
 #include "html-imp.h"
 
-#undef DEBUG_OFFICE_TO_HTML
+#include <limits.h>
+
+//#define DEBUG_OFFICE_TO_HTML
 
 /* Defaults are all 0's. FIXME: Very subject to change. Possibly might be removed entirely. */
 typedef struct
@@ -61,12 +63,9 @@ typedef struct
 	 * sheets name here. */
 	const char *sheet_name;
 
-	int shared_string_max;
-	int shared_string_len;
-	char **shared_strings;
+	fz_list(char *, shared_strings);
 
-	int footnotes_max;
-	char **footnotes;
+	fz_list(char *, footnotes);
 
 	char *title;
 } doc_info;
@@ -177,7 +176,7 @@ show_footnote(fz_context *ctx, fz_xml *v, doc_info *info)
 {
 	int n = fz_atoi(fz_xml_att(v, "w:id"));
 
-	if (n < 0 || n >= info->footnotes_max)
+	if (n < 0 || n >= info->footnotes_len)
 		return;
 
 	if (info->footnotes[n] == NULL ||
@@ -499,7 +498,7 @@ show_shared_string(fz_context *ctx, fz_xml *v, doc_info *info)
 	const char *t = fz_xml_text(fz_xml_down(v));
 	int n = fz_atoi(t);
 
-	if (n < 0 || n >= info->shared_string_len)
+	if (n < 0 || n >= info->shared_strings_len)
 		return;
 
 	if (info->shared_strings[n] == NULL ||
@@ -510,6 +509,11 @@ show_shared_string(fz_context *ctx, fz_xml *v, doc_info *info)
 	/* Then send the strings. */
 	doc_escape(ctx, info->out, info->shared_strings[n]);
 }
+
+/* Google docs maxes columns out at ZZZ = 18278.
+ * Excel (and similar) max out at XFD = 16384.
+ */
+#define MAX_GOOGLE_DOC_COLUMN 18278
 
 static int
 col_from_label(const char *label)
@@ -533,6 +537,8 @@ col_from_label(const char *label)
 	do
 	{
 		col = 26 * col + (*label++) - 'A' + base;
+		if (col > MAX_GOOGLE_DOC_COLUMN)
+			return 0;
 		base += len;
 		len *= 26;
 	}
@@ -893,13 +899,11 @@ load_shared_strings(fz_context *ctx, fz_archive *arch, fz_xml *rels, doc_info *i
 	const char *ss_file = fz_xml_att(pos, "Target");
 	char *resolved = NULL;
 	fz_xml *xml = NULL;
-	char *str = NULL;
 
 	if (ss_file == NULL)
 		return;
 
 	fz_var(xml);
-	fz_var(str);
 	fz_var(resolved);
 
 	fz_try(ctx)
@@ -910,22 +914,10 @@ load_shared_strings(fz_context *ctx, fz_archive *arch, fz_xml *rels, doc_info *i
 		pos = fz_xml_find_dfs(xml, "si", NULL, NULL);
 		while (pos)
 		{
-			int n = info->shared_string_len;
-			str = collate_t_content(ctx, pos);
+			char **ss = fz_push_list(ctx, info->shared_strings);
 
-			if (n == info->shared_string_max)
-			{
-				int max = info->shared_string_max;
-				int newmax = max ? max * 2 : 1024;
-				char **arr = fz_realloc(ctx, info->shared_strings, sizeof(*arr) * newmax);
-				memset(&arr[max], 0, sizeof(*arr) * (newmax - max));
-				info->shared_strings = arr;
-				info->shared_string_max = newmax;
-			}
+			*ss = collate_t_content(ctx, pos);
 
-			info->shared_strings[n] = str;
-			str = NULL;
-			info->shared_string_len++;
 			pos = fz_xml_find_next_dfs(pos, "si", NULL, NULL);
 		}
 	}
@@ -933,7 +925,6 @@ load_shared_strings(fz_context *ctx, fz_archive *arch, fz_xml *rels, doc_info *i
 	{
 		fz_drop_xml(ctx, xml);
 		fz_free(ctx, resolved);
-		fz_free(ctx, str);
 	}
 	fz_catch(ctx)
 		fz_rethrow(ctx);
@@ -964,25 +955,21 @@ load_footnotes(fz_context *ctx, fz_archive *arch, fz_xml *rels, doc_info *info, 
 		{
 			int n = fz_atoi(fz_xml_att(pos, "w:id"));
 
-			str = collate_t_content(ctx, pos);
-
-			if (str && n >= 0)
+			if (n < 0 || n >= INT_MAX)
 			{
-				if (n >= info->footnotes_max)
+				fz_warn(ctx, "Footnote %d out of range", n);
+			}
+			else
+			{
+				str = collate_t_content(ctx, pos);
+				if (str)
 				{
-					int max = info->footnotes_max;
-					int newmax = max ? max * 2 : 1024;
-					char **arr;
-					if (newmax < n)
-						newmax = n+1;
-					arr = fz_realloc(ctx, info->footnotes, sizeof(*arr) * newmax);
-					memset(&arr[max], 0, sizeof(*arr) * (newmax - max));
-					info->footnotes = arr;
-					info->footnotes_max = newmax;
-				}
+					if (n >= info->footnotes_len)
+						fz_extend_list(ctx, info->footnotes, n+1 - info->footnotes_len);
 
-				info->footnotes[n] = str;
-				str = NULL;
+					info->footnotes[n] = str;
+					str = NULL;
+				}
 			}
 			pos = fz_xml_find_next_dfs(pos, "footnote", NULL, NULL);
 		}
@@ -1202,10 +1189,10 @@ fz_office_to_html(fz_context *ctx, fz_html_font_set *set, fz_buffer *buffer_in, 
 	{
 		fz_drop_xml(ctx, rels);
 		fz_drop_xml(ctx, xml);
-		for (i = 0; i < info.shared_string_len; ++i)
+		for (i = 0; i < info.shared_strings_len; ++i)
 			fz_free(ctx, info.shared_strings[i]);
 		fz_free(ctx, info.shared_strings);
-		for (i = 0; i < info.footnotes_max; ++i)
+		for (i = 0; i < info.footnotes_len; ++i)
 			fz_free(ctx, info.footnotes[i]);
 		fz_free(ctx, info.footnotes);
 		fz_drop_output(ctx, info.out);
@@ -1241,7 +1228,7 @@ office_to_html(fz_context *ctx, fz_html_font_set *set, fz_buffer *buf, fz_archiv
 	return fz_office_to_html(ctx, set, buf, zip, &opts);
 }
 
-static const fz_htdoc_format_t fz_htdoc_office =
+static const fz_htdoc_format fz_htdoc_office =
 {
 	"Office document",
 	office_to_html,

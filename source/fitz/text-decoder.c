@@ -23,22 +23,22 @@
 #include "mupdf/fitz.h"
 #include "mupdf/pdf.h"
 
-static int simple_text_decode_bound(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t simple_text_decode_bound(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	return n * 4 + 1;
 }
 
-static int simple_text_decode_size(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t simple_text_decode_size(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	const unsigned short *table = dec->table1;
 	unsigned char *e = s + n;
-	int len = 1;
+	size_t len = 1;
 	while (s < e)
 		len += fz_runelen(table[*s++]);
 	return len;
 }
 
-static void simple_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, int n)
+static void simple_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, size_t n)
 {
 	const unsigned short *table = dec->table1;
 	unsigned char *e = s + n;
@@ -47,20 +47,20 @@ static void simple_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, 
 	*p = 0;
 }
 
-static int utf16be_text_decode_bound(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t utf16be_text_decode_bound(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	return n * 2 + 1;
 }
 
-static int utf16le_text_decode_bound(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t utf16le_text_decode_bound(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	return n * 2 + 1;
 }
 
-static int utf16be_text_decode_size(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t utf16be_text_decode_size(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
-	int len = 1;
+	size_t len = 1;
 	while (s + 1 < e) {
 		len += fz_runelen(s[0] << 8 | s[1]);
 		s += 2;
@@ -68,10 +68,10 @@ static int utf16be_text_decode_size(fz_text_decoder *dec, unsigned char *s, int 
 	return len;
 }
 
-static int utf16le_text_decode_size(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t utf16le_text_decode_size(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
-	int len = 1;
+	size_t len = 1;
 	while (s + 1 < e) {
 		len += fz_runelen(s[0] | s[1] << 8);
 		s += 2;
@@ -79,7 +79,7 @@ static int utf16le_text_decode_size(fz_text_decoder *dec, unsigned char *s, int 
 	return len;
 }
 
-static void utf16be_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, int n)
+static void utf16be_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
 	while (s + 1 < e) {
@@ -89,7 +89,7 @@ static void utf16be_text_decode(fz_text_decoder *dec, char *p, unsigned char *s,
 	*p = 0;
 }
 
-static void utf16le_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, int n)
+static void utf16le_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
 	while (s + 1 < e) {
@@ -99,19 +99,19 @@ static void utf16le_text_decode(fz_text_decoder *dec, char *p, unsigned char *s,
 	*p = 0;
 }
 
-static int cjk_text_decode_bound(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t cjk_text_decode_bound(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	return n * 4 + 1;
 }
 
-static int cjk_text_decode_size(fz_text_decoder *dec, unsigned char *s, int n)
+static size_t cjk_text_decode_size(fz_text_decoder *dec, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
 	pdf_cmap *to_cid = dec->table1;
 	pdf_cmap *to_uni = dec->table2;
 	unsigned int raw;
 	int cid, uni;
-	int len = 1;
+	size_t len = 1;
 	while (s < e) {
 		s += pdf_decode_cmap(to_cid, s, e, &raw);
 		cid = pdf_lookup_cmap(to_cid, raw);
@@ -128,7 +128,7 @@ static int cjk_text_decode_size(fz_text_decoder *dec, unsigned char *s, int n)
 	return len;
 }
 
-static void cjk_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, int n)
+static void cjk_text_decode(fz_text_decoder *dec, char *p, unsigned char *s, size_t n)
 {
 	unsigned char *e = s + n;
 	pdf_cmap *to_cid = dec->table1;

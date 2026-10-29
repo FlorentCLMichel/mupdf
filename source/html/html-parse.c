@@ -231,9 +231,7 @@ static const char *find_known_fb2_tag(const char *tag)
 
 typedef struct
 {
-	int maxcols;
-	int ncols;
-	col_style *styles;
+	fz_list(col_style, styles);
 }
 table_styles;
 
@@ -932,6 +930,8 @@ static void append_box(fz_context *ctx, fz_html_box *parent, fz_html_box *child)
 
 static fz_html_box *find_block_context(fz_context *ctx, fz_html_box *box)
 {
+	if (box->type == BOX_INLINE)
+		box->stop = 1;
 	while (box->type != BOX_BLOCK && box->type != BOX_TABLE_CELL)
 		box = box->up;
 	return box;
@@ -964,7 +964,10 @@ static fz_html_box *find_inline_context(fz_context *ctx, struct genstate *g, fz_
 	fz_css_style style;
 	fz_html_box *flow_box;
 
-	if (box->type == BOX_FLOW || box->type == BOX_INLINE)
+	if (box->type == BOX_FLOW)
+		return box;
+
+	if (box->type == BOX_INLINE && !box->stop)
 		return box;
 
 	// We have an inline element that is not in an existing flow/inline context.
@@ -1076,7 +1079,7 @@ apply_attributes_as_styles(fz_context *ctx, fz_css_style *style, fz_xml *node)
 
 	att = fz_xml_att(node, "bgcolor");
 	if (att)
-		style->background_color = fz_css_color_from_string(att);
+		style->background_color = fz_css_color_from_string(att, style->background_color);
 
 	att = fz_xml_att(node, "border");
 	if (att)
@@ -1192,16 +1195,7 @@ static fz_html_box *gen2_block(fz_context *ctx, struct genstate *g, fz_html_box 
 static void
 push_colstyle(fz_context *ctx, table_styles *ts, col_style cs)
 {
-	if (ts->ncols == ts->maxcols)
-	{
-		int newmax = ts->maxcols * 2;
-		if (newmax == 0)
-			newmax = 8;
-		ts->styles = fz_realloc(ctx, ts->styles, sizeof(ts->styles[0]) * newmax);
-		ts->maxcols = newmax;
-	}
-
-	ts->styles[ts->ncols++] = cs;
+	*(col_style *)fz_push_list(ctx, ts->styles) = cs;
 }
 
 static void gen2_col(fz_context *ctx, struct genstate *g, fz_html_box *root_box, fz_xml *node, fz_css_match *match)
@@ -1267,7 +1261,7 @@ static fz_html_box *gen2_table_cell(fz_context *ctx, struct genstate *g, fz_html
 
 	fz_match_css(ctx, &match, root_match, g->css, node, FZ_CSS_PSEUDO_NONE, g->publisher_css);
 	fz_apply_css_style(ctx, g->set, style, &match);
-	if (g->col_num < g->tab_styles.ncols)
+	if (g->col_num < g->tab_styles.styles_len)
 	{
 		/* Make a local copy of the style, and overlay anything onto it from col. */
 		col_style *cs = &g->tab_styles.styles[g->col_num];
@@ -1306,24 +1300,40 @@ static fz_html_box *gen2_table_cell(fz_context *ctx, struct genstate *g, fz_html
 
 static void gen2_image_common(fz_context *ctx, struct genstate *g, fz_html_box *root_box, fz_xml *node, fz_image *img, int display, fz_css_style *style)
 {
+	fz_css_style local_style = *style;
 	fz_html_box *img_block_box;
 	fz_html_box *img_inline_box;
+
+	int w, h;
+	const char *w_att = fz_xml_att(node, "width");
+	const char *h_att = fz_xml_att(node, "height");
+
+	if (w_att && (w = fz_atoi(w_att)) > 0)
+	{
+		local_style.width.value = w;
+		local_style.width.unit = strchr(w_att, '%') ? N_PERCENT : N_LENGTH;
+	}
+	if (h_att && (h = fz_atoi(h_att)) > 0)
+	{
+		local_style.height.value = h;
+		local_style.height.unit = strchr(h_att, '%') ? N_PERCENT : N_LENGTH;
+	}
 
 	if (display == DIS_INLINE || display == DIS_INLINE_BLOCK)
 	{
 		root_box = find_inline_context(ctx, g, root_box);
-		img_inline_box = new_box(ctx, g, node, BOX_INLINE, style);
+		img_inline_box = new_box(ctx, g, node, BOX_INLINE, &local_style);
 		append_box(ctx, root_box, img_inline_box);
 		generate_image(ctx, img_inline_box, img, g);
 	}
 	else
 	{
 		root_box = find_block_context(ctx, root_box);
-		img_block_box = new_box(ctx, g, node, BOX_BLOCK, style);
+		img_block_box = new_box(ctx, g, node, BOX_BLOCK, &local_style);
 		append_box(ctx, root_box, img_block_box);
 
 		root_box = find_inline_context(ctx, g, img_block_box);
-		img_inline_box = new_box(ctx, g, NULL, BOX_INLINE, style);
+		img_inline_box = new_box(ctx, g, NULL, BOX_INLINE, &local_style);
 		append_box(ctx, root_box, img_inline_box);
 		generate_image(ctx, img_inline_box, img, g);
 	}
@@ -1334,25 +1344,8 @@ static void gen2_image_html(fz_context *ctx, struct genstate *g, fz_html_box *ro
 	const char *src = fz_xml_att(node, "src");
 	if (src)
 	{
-		fz_css_style local_style = *style;
-		fz_image *img;
-		int w, h;
-		const char *w_att = fz_xml_att(node, "width");
-		const char *h_att = fz_xml_att(node, "height");
-
-		if (w_att && (w = fz_atoi(w_att)) > 0)
-		{
-			local_style.width.value = w;
-			local_style.width.unit = strchr(w_att, '%') ? N_PERCENT : N_LENGTH;
-		}
-		if (h_att && (h = fz_atoi(h_att)) > 0)
-		{
-			local_style.height.value = h;
-			local_style.height.unit = strchr(h_att, '%') ? N_PERCENT : N_LENGTH;
-		}
-
-		img = load_html_image(ctx, g->zip, g->base_uri, src);
-		gen2_image_common(ctx, g, root_box, node, img, display, &local_style);
+		fz_image *img = load_html_image(ctx, g->zip, g->base_uri, src);
+		gen2_image_common(ctx, g, root_box, node, img, display, style);
 	}
 }
 
@@ -1534,8 +1527,8 @@ static void gen2_tag(fz_context *ctx, struct genstate *g, fz_html_box *root_box,
 		int saved_col_num = g->col_num;
 		fz_try(ctx)
 		{
-			g->tab_styles.maxcols = 0;
-			g->tab_styles.ncols = 0;
+			g->tab_styles.styles_cap = 0;
+			g->tab_styles.styles_len = 0;
 			g->tab_styles.styles = NULL;
 			gen2_children(ctx, g, this_box, node, match);
 		}
@@ -1607,6 +1600,23 @@ static void gen2_children(fz_context *ctx, struct genstate *g, fz_html_box *root
 			else if (tag[0]=='c' && tag[1]=='o' && tag[2]=='l' && tag[3]==0)
 			{
 				gen2_col(ctx, g, root_box, node, &match);
+			}
+			else if (tag[0]=='t')
+			{
+				// ignore any display value other than "table(-row-group|-row|-cell)" or "none" on table elements
+				if (display != DIS_NONE)
+				{
+					if (!strcmp(tag, "table"))
+						gen2_tag(ctx, g, root_box, node, &match, DIS_TABLE, &style);
+					else if (!strcmp(tag, "thead") || !strcmp(tag, "tbody") || !strcmp(tag, "tfoot"))
+						gen2_tag(ctx, g, root_box, node, &match, DIS_TABLE_GROUP, &style);
+					else if (!strcmp(tag, "tr"))
+						gen2_tag(ctx, g, root_box, node, &match, DIS_TABLE_ROW, &style);
+					else if (!strcmp(tag, "td") || !strcmp(tag, "th"))
+						gen2_tag(ctx, g, root_box, node, &match, DIS_TABLE_CELL, &style);
+					else
+						gen2_tag(ctx, g, root_box, node, &match, display, &style);
+				}
 			}
 			else
 			{
@@ -2024,6 +2034,67 @@ static void parse_meta_viewport(fz_context *ctx, const char *viewport, float *me
 }
 
 static void
+append_xml_text(fz_context *ctx, fz_buffer *buf, fz_xml *node)
+{
+	while (node)
+	{
+		const char *text = fz_xml_text(node);
+		if (text && text[0])
+		{
+			/* skip pure whitespace text nodes between elements */
+			const char *p = text;
+			while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r'))
+				p++;
+			if (*p)
+			{
+				if (fz_buffer_storage(ctx, buf, NULL) > 0)
+					fz_append_byte(ctx, buf, ' ');
+				fz_append_string(ctx, buf, text);
+			}
+		}
+		append_xml_text(ctx, buf, fz_xml_down(node));
+		node = fz_xml_next(node);
+	}
+}
+
+static char *
+collect_text(fz_context *ctx, fz_pool *pool, fz_xml *node)
+{
+	fz_buffer *buf;
+	char *s = NULL;
+	unsigned char *data = NULL;
+	size_t len;
+
+	if (!node)
+		return NULL;
+
+	buf = fz_new_buffer(ctx, 128);
+	fz_try(ctx)
+	{
+		append_xml_text(ctx, buf, fz_xml_down(node));
+		fz_terminate_buffer(ctx, buf);
+		len = fz_buffer_storage(ctx, buf, &data);
+		if (len > 0 && data)
+		{
+			char *start = (char *)data;
+			char *end;
+			while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r')
+				start++;
+			end = start + strlen(start);
+			while (end > start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r'))
+				*--end = 0;
+			if (*start)
+				s = fz_pool_strdup(ctx, pool, start);
+		}
+	}
+	fz_always(ctx)
+		fz_drop_buffer(ctx, buf);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
+	return s;
+}
+
+static void
 xml_to_boxes(fz_context *ctx,
 	fz_html_font_set *set,
 	fz_archive *zip,
@@ -2031,16 +2102,15 @@ xml_to_boxes(fz_context *ctx,
 	const char *user_css,
 	fz_xml_doc *xml,
 	fz_html_tree *tree,
-	char **rtitle,
+	fz_html_metadata *metadata,
 	fz_html_flavor flavor,
 	int publisher_css,
 	float *meta_w,
 	float *meta_h
 )
 {
-	fz_xml *root, *node, *head;
+	fz_xml *root, *node, *head, *node2;
 	char *viewport;
-	char *title;
 
 	fz_css_match root_match, match;
 	struct genstate g = {0};
@@ -2065,8 +2135,8 @@ xml_to_boxes(fz_context *ctx,
 	g.publisher_css = publisher_css;
 	g.depth = 0;
 
-	if (rtitle)
-		*rtitle = NULL;
+	if (metadata)
+		memset(metadata, 0, sizeof(*metadata));
 
 	root = fz_xml_root(g.xml);
 	g.css = fz_new_css(ctx);
@@ -2157,27 +2227,49 @@ xml_to_boxes(fz_context *ctx,
 
 		if (g.is_fb2)
 		{
-			node = fz_xml_find(root, "FictionBook");
-			node = fz_xml_find_down(node, "description");
-			node = fz_xml_find_down(node, "title-info");
-			node = fz_xml_find_down(node, "book-title");
-			if (rtitle)
+			if (metadata)
 			{
-				title = fz_xml_text(fz_xml_down(node));
-				if (title)
-					*rtitle = fz_pool_strdup(ctx, g.pool, title);
+				char *author = NULL, *first_name, *last_name;
+
+				node = fz_xml_find(root, "FictionBook");
+				node = fz_xml_find_down(node, "description");
+				node = fz_xml_find_down(node, "title-info");
+				node2 = fz_xml_find_down(node, "book-title");
+				metadata->title = collect_text(ctx, g.pool, node2);
+
+				for (node2 = fz_xml_find_down(node, "author"); node2; node2 = fz_xml_find_next(node2, "author"))
+				{
+					first_name = collect_text(ctx, g.pool, fz_xml_find_down(node2, "first-name"));
+					last_name = collect_text(ctx, g.pool, fz_xml_find_down(node2, "last-name"));
+					if (first_name && last_name)
+					{
+						if (author)
+							author = fz_pool_asprintf(ctx, g.pool, "%s, %s %s", author, first_name, last_name);
+						else
+							author = fz_pool_asprintf(ctx, g.pool, "%s %s", first_name, last_name);
+					}
+					else
+					{
+						if (author)
+							author = fz_pool_asprintf(ctx, g.pool, "%s, %s", author, collect_text(ctx, g.pool, node2));
+						else
+							author = collect_text(ctx, g.pool, node2);
+					}
+				}
+				metadata->author = author;
+
+				node2 = fz_xml_find_down(node, "annotation");
+				metadata->subject = collect_text(ctx, g.pool, node2);
 			}
 		}
 		else
 		{
-			head = fz_xml_find(root, "html");
-			head = fz_xml_find_down(head, "head");
-			node = fz_xml_find_down(head, "title");
-			if (rtitle)
+			if (metadata)
 			{
-				title = fz_xml_text(fz_xml_down(node));
-				if (title)
-					*rtitle = fz_pool_strdup(ctx, g.pool, title);
+				head = fz_xml_find(root, "html");
+				head = fz_xml_find_down(head, "head");
+				node = fz_xml_find_down(head, "title");
+				metadata->title = collect_text(ctx, g.pool, node);
 			}
 
 			// Move html or body background-color to :root.
@@ -2204,10 +2296,14 @@ xml_to_boxes(fz_context *ctx,
 	}
 	fz_catch(ctx)
 	{
-		if (rtitle)
+		if (metadata)
 		{
-			fz_free(ctx, *rtitle);
-			*rtitle = NULL;
+			fz_free(ctx, metadata->title);
+			metadata->title = NULL;
+			fz_free(ctx, metadata->author);
+			metadata->author = NULL;
+			fz_free(ctx, metadata->subject);
+			metadata->subject = NULL;
 		}
 		fz_rethrow(ctx);
 	}
@@ -2310,7 +2406,7 @@ patch_mobi_html(fz_context *ctx, fz_pool *pool, fz_xml *node)
 static void
 fz_parse_html_tree(fz_context *ctx,
 	fz_html_font_set *set, fz_archive *zip, const char *base_uri, fz_buffer *buf, const char *user_css,
-	int try_xml, int try_html5, fz_html_tree *tree, char **rtitle, fz_html_flavor flavor,
+	int try_xml, int try_html5, fz_html_tree *tree, fz_html_metadata *metadata, fz_html_flavor flavor,
 	int publisher_css,
 	float *meta_w,
 	float *meta_h
@@ -2318,16 +2414,16 @@ fz_parse_html_tree(fz_context *ctx,
 {
 	fz_xml_doc *xml;
 
-	if (rtitle)
-		*rtitle = NULL;
+	if (metadata)
+		memset(metadata, 0, sizeof(*metadata));
 
 	xml = parse_to_xml(ctx, buf, try_xml, try_html5);
 
 	if (flavor == FZ_HTML_FLAVOR_MOBI)
-		patch_mobi_html(ctx, xml->u.doc.pool, fz_xml_root(xml));
+		patch_mobi_html(ctx, fz_xml_pool(xml), fz_xml_root(xml));
 
 	fz_try(ctx)
-		xml_to_boxes(ctx, set, zip, base_uri, user_css, xml, tree, rtitle, flavor, publisher_css,
+		xml_to_boxes(ctx, set, zip, base_uri, user_css, xml, tree, metadata, flavor, publisher_css,
 			meta_w, meta_h);
 	fz_always(ctx)
 		fz_drop_xml(ctx, xml);
@@ -2374,7 +2470,7 @@ fz_parse_html(fz_context *ctx,
 	html->layout_em = 0;
 
 	fz_try(ctx)
-		fz_parse_html_tree(ctx, set, zip, base_uri, buf, user_css, try_xml, try_html5, &html->tree, &html->title, flavor, publisher_css,
+		fz_parse_html_tree(ctx, set, zip, base_uri, buf, user_css, try_xml, try_html5, &html->tree, &html->metadata, flavor, publisher_css,
 			&html->meta_w, &html->meta_h);
 	fz_catch(ctx)
 	{
@@ -2433,6 +2529,14 @@ restore_warnings(fz_context *ctx, warning_save *save)
 
 	fz_flush_warnings(ctx);
 	fz_set_warning_callback(ctx, save->old, save->arg);
+}
+
+fz_xml *fz_story_document(fz_context *ctx, fz_story *story)
+{
+	if (story == NULL || story->dom == NULL)
+		return NULL;
+
+	return story->dom;
 }
 
 fz_story *

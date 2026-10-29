@@ -36,6 +36,8 @@ run-release-test:
 	$(MAKE) nuke
 	$(MAKE) -f scripts/release-test.make test-memento-build
 	$(MAKE) nuke
+	$(MAKE) -f scripts/release-test.make make-all-debug
+	$(MAKE) nuke
 	$(MAKE) -f scripts/release-test.make make-one-disabled-config
 	$(MAKE) nuke
 	$(MAKE) -f scripts/release-test.make make-one-enabled-config
@@ -133,6 +135,65 @@ make-memento-build:
 
 test-memento-build: make-memento-build pdfref17.pdf
 	./build/memento/mutool draw -st pdfref17.pdf N-1
+
+make-all-debug:
+	$(MAKE) -j2 XCFLAGS=" \
+		-DBMP_DEBUG \
+		-DCHECK_SPLAY \
+		-DDEBUG_ALLOCS \
+		-DDEBUG_BIDI_OUTLINE \
+		-DDEBUG_BIDI_VERBOSE \
+		-DDEBUG_CSS_SPLAY \
+		-DDEBUG_DESKEWER \
+		-DDEBUG_DESPERATE_SPLITTING \
+		-DDEBUG_DIRENTRIES \
+		-DDEBUG_HARFBUZZ \
+		-DDEBUG_HEAP_SORT \
+		-DDEBUG_HTML_SEQ \
+		-DDEBUG_LAYOUT_RESTARTING \
+		-DDEBUG_MARK_AND_SWEEP \
+		-DDEBUG_OCR \
+		-DDEBUG_OFFICE_TO_HTML \
+		-DDEBUG_PARA_SPLITS \
+		-DDEBUG_PRINT_WORKING \
+		-DDEBUG_PROGESSIVE_ADVANCE \
+		-DDEBUG_RAFT \
+		-DDEBUG_SCAN_CONVERTER \
+		-DDEBUG_SCAVENGING \
+		-DDEBUG_SPLITS \
+		-DDEBUG_STRUCT \
+		-DDEBUG_STRUCTURE \
+		-DDEBUG_SUBSETTING \
+		-DDEBUG_TABLE_HUNT \
+		-DDEBUG_TABLE_SCORES \
+		-DDEBUG_TABLE_SPLITS \
+		-DDEBUG_TABLE_STRUCTURE \
+		-DDEBUG_THREADS \
+		-DDEBUG_WRITE_AS_PS \
+		-DDEBUG_WRITING \
+		-DDETECT_DOCUMENT_RGB \
+		-DDO_HISTEQ \
+		-DDUMP_GROUP_BLENDS \
+		-DDUMP_LEXER_STREAM \
+		-DDUMP_SPLAY \
+		-DDUMP_STACK_CHANGES \
+		-DENABLE_STORE_LOGGING \
+		-DFITZ_DEBUG_LOCKING \
+		-DFITZ_DEBUG_LOCKING_TIMES \
+		-DFZ_XML_SEQ \
+		-DJBIG2_DEBUG \
+		-DPDF_DEBUG_APPEARANCE_SYNTHESIS \
+		-DPDF_DEBUG_JOURNAL \
+		-DSLOW_INTERPOLATION \
+		-DSLOW_WARPING \
+		-DTEST_BUFFER_WRITE \
+		-DTEST_PROGRESSIVE_HACK \
+		-DTEST_PROGRESSIVE_LOADING \
+		-DTRACK_USAGE \
+		-DTIMINGS \
+		-DWARP_DEBUG \
+		-DWARP_SPEW_DEBUG \
+	" build=debug
 
 make-all-disabled-defines:
 	$(MAKE) -j2 XCFLAGS='-DFZ_ENABLE_CBZ=0 -DFZ_ENABLE_DOCX_OUTPUT=0 -DFZ_ENABLE_EPUB=0 -DFZ_ENABLE_FB2=0 -DFZ_ENABLE_HTML=0 -DFZ_ENABLE_MD=0 -DFZ_ENABLE_HTML_ENGINE=0 -DFZ_ENABLE_ICC=0 -DFZ_ENABLE_IMG=0 -DFZ_ENABLE_JPX=0 -DFZ_ENABLE_JS=0 -DFZ_ENABLE_MOBI=0 -DFZ_ENABLE_OCR_OUTPUT=0 -DFZ_ENABLE_ODT_OUTPUT=0 -DFZ_ENABLE_OFFICE=0 -DFZ_ENABLE_PDF=0 -DFZ_ENABLE_SPOT_RENDERING=0 -DFZ_ENABLE_SVG=0 -DFZ_ENABLE_TXT=0 -DFZ_ENABLE_XPS=0 -DFZ_ENABLE_BROTLI=0' build=release
@@ -245,13 +306,13 @@ make-examples:
 test-examples: make-examples pdfref17.pdf
 	mkdir -p build/examples
 	build/release/example pdfref17.pdf 1 > build/examples/out.pnm
-	cd build/examples; ../release/multi-threaded ../../pdfref17.pdf; zip -0 ../examples.zip out*; cd ../..
+	cd build/examples; ../release/multi-threaded ../../pdfref17.pdf; zip -0 ../examples.zip out[01]*.png out.pnm; cd ../..
 	/usr/bin/test 575cf1e8383db6c82b7a9a4496c698bc == $$(./build/release/mutool draw -Ds5 build/examples.zip 2>&1 | md5sum - | cut -d' ' -f1)
 	cd build/examples; ../release/storytest; cd ../..
 	/usr/bin/test 16ee5292a566ef337f663798603e6d82 == $$(./build/release/mutool draw -Ds5 build/examples/leftright.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test fb0056830bf6670f675a0d8068016c52 == $$(./build/release/mutool draw -Ds5 build/examples/out2.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test 7904ed25c086adced8280f94f3366120 == $$(./build/release/mutool draw -Ds5 build/examples/out3.pdf 2>&1 | md5sum - | cut -d' ' -f1)
-	/usr/bin/test c1bd90c127a6758168280b1eddd25462 == $$(./build/release/mutool draw -Ds5 build/examples/out.pdf 2>&1 | md5sum - | cut -d' ' -f1)
+	/usr/bin/test b830c9d57942a242b6e827f64cb8a0cd == $$(./build/release/mutool draw -Ds5 build/examples/out.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test c88e11423ca72c9751f716456dd36e84 == $$(./build/release/mutool draw -Ds5 build/examples/out_toc.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test 963dd1503dd1eb93d84052fa56b155df == $$(./build/release/mutool draw -Ds5 build/examples/pos_absolute.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test 428ec7e05b35b7b8566f7c0c9f913ef4 == $$(./build/release/mutool draw -Ds5 build/examples/pos_absolute_sizes.pdf 2>&1 | md5sum - | cut -d' ' -f1)
@@ -265,7 +326,7 @@ test-examples: make-examples pdfref17.pdf
 	/usr/bin/test 2867732089375db03f2c3e6f129c635b == $$(./build/release/mutool draw -Ds5 build/examples/tablespan.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test b7442e961aff29d7d11bc9f35d67fd4f == $$(./build/release/mutool draw -Ds5 build/examples/tables.pdf 2>&1 | md5sum - | cut -d' ' -f1)
 	/usr/bin/test 5c17970f54c4a7ad1ff35b2160cc2238 == $$(./build/release/mutool draw -Ds5 build/examples/tablewidths.pdf 2>&1 | md5sum - | cut -d' ' -f1)
-	/usr/bin/test d12a8b9cda4634aad371af5db4883a11 == $$(./build/release/searchtest 2>&1 | md5sum - | cut -d' ' -f1)
+	/usr/bin/test e01c5a0854363dfdd9362051570e0c40 == $$(./build/release/searchtest 2>&1 | md5sum - | cut -d' ' -f1)
 
 make-python-build:
 	$(MAKE) -j2 python

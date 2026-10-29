@@ -215,6 +215,7 @@ static float layout_em = FZ_DEFAULT_LAYOUT_EM;
 static char *layout_css = NULL;
 static char *layout_css_data = NULL;
 static int layout_use_css = 1; // bitmask: 1=publisher-css, 2=user-css
+static int external_access = 0;
 static int enable_js = 1;
 static int tint_white = 0xFFFFF0;
 static int tint_black = 0x303030;
@@ -1602,7 +1603,7 @@ static void do_page_selection(void)
 
 		glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 		glEnable(GL_BLEND);
-		glColor4f(0.0, 0.1, 0.4, 0.3f);
+		glColor4f(0.0f, 0.1f, 0.4f, 0.3f);
 
 		glBegin(GL_QUADS);
 		for (i = 0; i < n; ++i)
@@ -1820,6 +1821,7 @@ static void load_document(void)
 	time_t atime;
 	time_t dtime;
 	fz_location location;
+	fz_archive *dir = NULL;
 
 	fz_drop_outline(ctx, outline);
 	outline = NULL;
@@ -1863,9 +1865,18 @@ static void load_document(void)
 		}
 	}
 
-	trace_action("doc = Document.openDocument(%q);\n", filename);
+	if (external_access)
+	{
+		char dirname[PATH_MAX];
+		fz_dirname(dirname, filename, sizeof dirname);
+		dir = fz_open_directory(ctx, dirname);
+		trace_action("doc = Document.openDocument(%q, undefined, new Archive(%q));\n", filename, dirname);
+	}
+	else
+		trace_action("doc = Document.openDocument(%q);\n", filename);
 
-	doc = fz_open_accelerated_document(ctx, filename, accel);
+	doc = fz_open_accelerated_document_with_dir(ctx, filename, accel, dir);
+	fz_drop_archive(ctx, dir);
 	pdf = pdf_specifics(ctx, doc);
 
 	if (pdf && trace_file)
@@ -2555,31 +2566,22 @@ static void do_app(void)
 
 typedef struct
 {
-	int max;
-	int len;
-	pdf_obj **sig;
+	fz_list(pdf_obj *, sig);
 } sigs_list;
 
 static void
 process_sigs(fz_context *ctx_, pdf_obj *field, void *arg, pdf_obj **ft)
 {
 	sigs_list *sigs = (sigs_list *)arg;
+	pdf_obj **op;
 
 	if (!pdf_name_eq(ctx, pdf_dict_get(ctx, field, PDF_NAME(Type)), PDF_NAME(Annot)) ||
 		!pdf_name_eq(ctx, pdf_dict_get(ctx, field, PDF_NAME(Subtype)), PDF_NAME(Widget)) ||
 		!pdf_name_eq(ctx, *ft, PDF_NAME(Sig)))
 		return;
 
-	if (sigs->len == sigs->max)
-	{
-		int newsize = sigs->max * 2;
-		if (newsize == 0)
-			newsize = 4;
-		sigs->sig = fz_realloc_array(ctx, sigs->sig, newsize, pdf_obj *);
-		sigs->max = newsize;
-	}
-
-	sigs->sig[sigs->len++] = field;
+	op = fz_push_list(ctx, sigs->sig);
+	*op = field;
 }
 
 static char *short_signature_error_desc(pdf_signature_error err)
@@ -2725,10 +2727,10 @@ static fz_buffer *format_info_text()
 				fz_append_printf(ctx, out, "Invalid changes made to the document %d updates ago.\n", n);
 		}
 
-		if (list.len)
+		if (list.sig_len)
 		{
 			int i;
-			for (i = 0; i < list.len; i++)
+			for (i = 0; i < list.sig_len; i++)
 			{
 				pdf_obj *field = list.sig[i];
 				fz_try(ctx)
@@ -3163,7 +3165,9 @@ static void usage(const char *argv0)
 	fprintf(stderr, "\t-C -\tset white tint color (default: FFFFF0)\n");
 	fprintf(stderr, "\t-Y -\tset the UI scaling factor\n");
 	fprintf(stderr, "\t-R -\tenable reflow and set the text extraction options\n");
+	fprintf(stderr, "\t--external-access\tallow access to directory containing file for external resources\n");
 	fprintf(stderr, "\t\t\texample: -R dehyphenate,preserve-images\n");
+	fprintf(stderr, "\t-f\tstart in fullscreen mode\n");
 	exit(1);
 }
 
@@ -3257,6 +3261,11 @@ int main(int argc, char **argv)
 	const char *profile_name = NULL;
 	float scale = 0;
 	int c;
+	const fz_getopt_long_options longopts[] =
+	{
+		{ "external-access", NULL, (void *)1 },
+		{ NULL, NULL, NULL }
+	};
 
 #ifndef _WIN32
 
@@ -3272,10 +3281,28 @@ int main(int argc, char **argv)
 
 	glutInit(&argc, argv);
 
-	while ((c = fz_getopt(argc, argv, "p:r:IW:H:S:U:XJb:A:B:C:T:Y:R:c:v")) != -1)
+#define SWITCH(x) switch ((intptr_t)(x))
+#define CASE(x) case ((intptr_t)(x))
+
+	while ((c = fz_getopt_long(argc, argv, "p:r:IW:H:S:U:XJb:A:B:C:T:Y:R:c:vf", longopts)) != -1)
 	{
 		switch (c)
 		{
+		case 0:
+		{
+			SWITCH(fz_optlong->opaque)
+			{
+			// Any future long options go here.
+			default:
+			case 0:
+				assert(!"Never happens");
+				break;
+			case 1:
+				external_access = 1;
+				break;
+			}
+			break;
+		}
 		default: usage(argv[0]); break;
 		case 'v': version(); break;
 		case 'p': password = fz_optarg; break;
@@ -3295,6 +3322,7 @@ int main(int argc, char **argv)
 		case 'R': reflow_options = fz_optarg; break;
 		case 'T': trace_file_name = fz_optpath(fz_optarg); break;
 		case 'Y': scale = fz_atof(fz_optarg); break;
+		case 'f': isfullscreen = 1; break;
 		}
 	}
 
@@ -3425,6 +3453,9 @@ int main(int argc, char **argv)
 #if FZ_ENABLE_JS
 	console_h *= ui.lineheight;
 #endif
+
+	if (isfullscreen)
+		glutFullScreen();
 
 	glutMainLoop();
 

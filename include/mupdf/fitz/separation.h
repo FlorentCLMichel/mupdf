@@ -35,14 +35,11 @@
 	and subsequent renders would take this into account.
 */
 
-enum
-{
-	FZ_MAX_SEPARATIONS = 64
-};
+#define FZ_MAX_SEPARATIONS 64
 
 typedef struct fz_separations fz_separations;
 
-typedef enum
+typedef enum fz_separation_behavior
 {
 	/* "Composite" separations are rendered using process
 	 * colors using the equivalent colors */

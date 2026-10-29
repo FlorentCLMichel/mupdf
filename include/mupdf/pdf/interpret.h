@@ -20,8 +20,8 @@
 // Artifex Software, Inc., 39 Mesa Street, Suite 108A, San Francisco,
 // CA 94129, USA, for further information.
 
-#ifndef PDF_INTERPRET_H
-#define PDF_INTERPRET_H
+#ifndef MUPDF_PDF_INTERPRET_H
+#define MUPDF_PDF_INTERPRET_H
 
 #include "mupdf/pdf/font.h"
 #include "mupdf/pdf/resource.h"
@@ -48,7 +48,7 @@ struct pdf_resource_stack
 
 pdf_obj *pdf_lookup_resource(fz_context *ctx, pdf_resource_stack *stack, pdf_obj *type, const char *name);
 
-typedef enum
+typedef enum pdf_processor_requirements
 {
 	PDF_PROCESSOR_REQUIRES_DECODED_IMAGES = 1
 } pdf_processor_requirements;
@@ -172,7 +172,7 @@ struct pdf_processor
 	void (*op_k)(fz_context *ctx, pdf_processor *proc, float c, float m, float y, float k);
 
 	/* shadings, images, xobjects */
-	void (*op_BI)(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace_name);
+	void (*op_BI)(fz_context *ctx, pdf_processor *proc, fz_image *image, const char *colorspace_name, int cs_is_inline);
 	void (*op_sh)(fz_context *ctx, pdf_processor *proc, const char *name, fz_shade *shade);
 	void (*op_Do_image)(fz_context *ctx, pdf_processor *proc, const char *name, fz_image *image);
 	void (*op_Do_form)(fz_context *ctx, pdf_processor *proc, const char *name, pdf_obj *form);
@@ -214,7 +214,7 @@ struct pdf_processor
 	pdf_processor *chain;
 };
 
-typedef struct
+typedef struct pdf_csi
 {
 	/* input */
 	pdf_document *doc;
@@ -301,7 +301,7 @@ typedef pdf_processor *(pdf_filter_factory_fn)(fz_context *ctx, pdf_document *do
 	A pdf_filter_factory is a pdf_filter_factory_fn, plus the options
 	needed to instantiate it.
 */
-typedef struct
+typedef struct pdf_filter_factory
 {
 	pdf_filter_factory_fn *filter;
 	void *options;
@@ -347,17 +347,17 @@ struct pdf_filter_options
 	int newlines;
 };
 
-typedef enum
+typedef enum fz_cull_type
 {
-	FZ_CULL_PATH_DROP = 0,
-	FZ_CULL_PATH_FILL = 1,
-	FZ_CULL_PATH_STROKE = 2,
-	FZ_CULL_PATH_FILL_STROKE = 3,
-	FZ_CULL_CLIP_PATH_DROP = 4,
-	FZ_CULL_CLIP_PATH_FILL = 5,
-	FZ_CULL_CLIP_PATH_STROKE = 6,
-	FZ_CULL_CLIP_PATH_FILL_STROKE = 7,
-	FZ_CULL_GLYPH = 8,
+	FZ_CULL_PATH_DROP,
+	FZ_CULL_PATH_FILL,
+	FZ_CULL_PATH_STROKE,
+	FZ_CULL_PATH_FILL_STROKE,
+	FZ_CULL_CLIP_PATH_DROP,
+	FZ_CULL_CLIP_PATH_FILL,
+	FZ_CULL_CLIP_PATH_STROKE,
+	FZ_CULL_CLIP_PATH_FILL_STROKE,
+	FZ_CULL_GLYPH,
 	FZ_CULL_IMAGE,
 	FZ_CULL_SHADING
 } fz_cull_type;
@@ -376,7 +376,7 @@ typedef enum
 	culler: A function called to see whether each object should
 	be culled or not.
 */
-typedef struct
+typedef struct pdf_sanitize_filter_options
 {
 	void *opaque;
 	fz_image *(*image_filter)(fz_context *ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image, fz_rect scissor);
@@ -412,7 +412,7 @@ pdf_sanitize_filter_options;
 */
 pdf_processor *pdf_new_sanitize_filter(fz_context *ctx, pdf_document *doc, pdf_processor *chain, int struct_parents, fz_matrix transform, pdf_filter_options *options, void *sopts);
 
-typedef struct
+typedef struct pdf_vectorize_filter_options
 {
 	void *opaque;
 	/* To be expanded */
@@ -428,41 +428,37 @@ void pdf_processor_push_resources(fz_context *ctx, pdf_processor *proc, pdf_obj 
 pdf_obj *pdf_processor_pop_resources(fz_context *ctx, pdf_processor *proc);
 
 /*
-	opaque: Opaque value that is passed to all the filter functions.
+	opaque:
+	: Opaque value that is passed to all the filter functions.
 
-	color_rewrite: function pointer called to rewrite a color
-		On entry:
-			*cs = reference to a pdf object representing the colorspace.
+	color_rewrite:
+	: function pointer called to rewrite a color
+	: On entry
+		: *cs = reference to a pdf object representing the colorspace.
+		: *n = number of color components
+		: color = *n color values.
+	: On exit
+		: *cs = either the same (for no change in colorspace) or updated to be a new one.
+			Reference must be dropped, and a new kept reference returned!
+		: *n = number of color components (maybe updated)
+		: color = *n color values (maybe updated)
 
-			*n = number of color components
+	image_rewrite:
+	: function pointer called to rewrite an image
+	: On entry
+		: *image = reference to an fz_image.
+	: On exit
+		: *image = either the same (for no change) or updated to be a new one.
+			Reference must be dropped, and a new kept reference returned.
 
-			color = *n color values.
+	share_rewrite:
+	: function pointer called to rewrite a shade
 
-		On exit:
-			*cs either the same (for no change in colorspace) or
-			updated to be a new one. Reference must be dropped, and
-			a new kept reference returned!
-
-			*n = number of color components (maybe updated)
-
-			color = *n color values (maybe updated)
-
-	image_rewrite: function pointer called to rewrite an image
-		On entry:
-			*image = reference to an fz_image.
-
-		On exit:
-			*image either the same (for no change) or updated
-			to be a new one. Reference must be dropped, and a
-			new kept reference returned.
-
-	share_rewrite: function pointer called to rewrite a shade
-
-	repeated_image_rewrite: If 0, then each image is rewritten only once.
-		Otherwise, it is called for every instance (useful if gathering
-		information about the ctm).
+	repeated_image_rewrite:
+	: If 0, then each image is rewritten only once.
+	: Otherwise, it is called for every instance (useful if gathering information about the ctm).
 */
-typedef struct
+typedef struct pdf_color_filter_options
 {
 	void *opaque;
 	void (*color_rewrite)(fz_context *ctx, void *opaque, pdf_obj **cs, int *n, float color[FZ_MAX_COLORS]);
@@ -488,7 +484,7 @@ void pdf_process_glyph(fz_context *ctx, pdf_processor *proc, pdf_document *doc, 
 void pdf_process_raw_contents(fz_context *ctx, pdf_processor *proc, pdf_document *doc, pdf_obj *stmobj, fz_cookie *cookie);
 
 /* Text handling helper functions */
-typedef struct
+typedef struct pdf_text_state
 {
 	float char_space;
 	float word_space;
@@ -501,9 +497,10 @@ typedef struct
 	float rise;
 } pdf_text_state;
 
-typedef struct
+typedef struct pdf_text_object_state
 {
 	fz_text *clip_text; /* accumulator for clip mode text */
+	fz_rect clip_text_bbox;
 	fz_text *text;
 	fz_rect text_bbox;
 	fz_matrix tlm;

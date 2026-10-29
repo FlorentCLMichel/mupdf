@@ -26,7 +26,7 @@
 
 #define STACK_SIZE 96
 
-typedef struct fz_bbox_device_s
+typedef struct fz_bbox_device
 {
 	fz_device super;
 
