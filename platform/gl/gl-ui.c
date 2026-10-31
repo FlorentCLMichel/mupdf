@@ -442,7 +442,7 @@ void ui_init(int w, int h, const char *title)
 
 	glutInitErrorFunc(on_error);
 	glutInitWarningFunc(on_warning);
-	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
+	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_BORDERLESS);
 	glutInitWindowSize(w, h);
 	glutCreateWindow(title);
 
